@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlm-clip-baseline"
+version = "0.1.0"
+description = "Frozen CLIP zero-shot accuracy and per-sample entropy for TPT datasets"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.0", "torchvision>=0.15", "Pillow>=9", "PyYAML>=6", "tqdm>=4", "ftfy", "regex", "setuptools>=68,<81"]
+
+[project.scripts]
+clip-evaluate = "vlm_clip.cli.evaluate:main"
+
+[project.optional-dependencies]
+data = ["gdown>=5"]
+visualization = ["matplotlib>=3.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"vlm_clip.data" = ["*.json"]
