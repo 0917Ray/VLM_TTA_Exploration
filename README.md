@@ -8,6 +8,20 @@
 
 原始数据、下载压缩包、模型权重和生成结果只保留在本地，不提交到 GitHub。
 
+## Zero-shot 结果
+
+Pure CLIP zero-shot Top-1 准确率如下。数值为 seed 42、43、44 的均值和总体标准差；
+当前评测不含随机增强，因此三个 seed 的结果一致。
+
+| 模型 | ImageNet-V2 | ImageNet-A | ImageNet-R | ImageNet-Sketch |
+| --- | ---: | ---: | ---: | ---: |
+| CLIP-RN50 | 51.4600% +/- 0.0000% | 21.8533% +/- 0.0000% | 56.1167% +/- 0.0000% | 33.3589% +/- 0.0000% |
+| CLIP-ViT-B/16 | 60.8800% +/- 0.0000% | 47.8267% +/- 0.0000% | 73.9833% +/- 0.0000% | 46.1023% +/- 0.0000% |
+
+评测使用单模板 `a photo of a {}.` 和 TPT 的 ImageNet 类别名称。ImageNet-A/R
+按官方协议在各自 200 类候选集合中预测，ImageNet-V2/Sketch 使用完整 1000 类。
+完整设置与输出格式见 [Pure CLIP Zero-shot 测试](guide/clip_test.md)。
+
 ## 快速开始
 
 首次使用时，按照[环境准备](guide/preparation.md#环境准备)创建 `clip` 环境并安装依赖。以下命令均在项目根目录执行：
