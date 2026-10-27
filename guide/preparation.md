@@ -1,4 +1,4 @@
-# 数据集准备
+# 准备工作
 
 本文说明 ImageNet 及四个分布偏移数据集的下载、目录整理和可视化方法。
 
@@ -6,7 +6,31 @@
 - 下载文件放在 `data/downloads/`。
 - 可视化结果放在 `runs/dataset_visualizations/`。
 
-## 数据集
+## 环境准备
+
+在运行 zero-shot 评测前创建一次 `clip` 环境。以下命令适用于带 NVIDIA GPU、CUDA 13.0 的环境：
+
+```bash
+conda create -n clip python=3.10 -y
+conda activate clip
+python -m pip install --upgrade pip
+python -m pip install torch==2.9.1 torchvision==0.24.1 \
+  --index-url https://download.pytorch.org/whl/cu130
+python -m pip install 'setuptools<81'
+python -m pip install --no-build-isolation \
+  'git+https://github.com/openai/CLIP.git@a1d071733d7111c9c014f024669f959182114e33'
+python -m pip install Pillow PyYAML tqdm ftfy regex matplotlib
+```
+
+验证安装：
+
+```bash
+python -c "import torch, clip; print(torch.cuda.is_available(), torch.cuda.device_count())"
+```
+
+输出应包含 `True` 和可用 GPU 数量。没有 NVIDIA GPU 时，请按 PyTorch 官网选择 CPU 版安装命令。`setuptools<81` 和 `--no-build-isolation` 用于兼容 OpenAI CLIP 的旧版打包配置。
+
+## 数据集准备
 
 | 数据集 | 说明 | 来源 |
 | --- | --- | --- |
