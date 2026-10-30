@@ -1,0 +1,30 @@
+data_root: data/raw
+class_index: configs/visualization/imagenet_class_index.json
+class_names: configs/evaluation/imagenet_classes_tpt.json
+model_root: models
+output_root: runs/tpt_quick_demo
+idea: init_test_num_work_2
+datasets:
+  - imagenet-a
+models:
+  # - RN50
+  - ViT-B/16
+devices:
+  - cuda:0
+  # - cuda:1
+  - cuda:2
+  # - cuda:3
+seeds:
+  - 11
+  - 42
+  # - 123
+num_workers: 2
+views: 64
+selection_fraction: 0.1
+tta_steps: 1
+learning_rate: 0.005
+prompt_init: "a photo of a"
+resolution: 224
+print_frequency: 100
+limit: null
+log_file: run.log

@@ -9,3 +9,4 @@ data/splits/*
 data/downloads/
 models/*
 runs/*
+conversation_w_GPT/

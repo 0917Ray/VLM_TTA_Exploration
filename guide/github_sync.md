@@ -8,6 +8,12 @@ git@github.com:0917Ray/VLM_TTA_Exploration.git
 
 以下命令均在项目根目录执行。
 
+## 关于配置文件
+
+本教程没有对应的 YAML 实验配置文件，因为 Git 同步操作不是本仓库中的评测任务。下文的 `git config` 是 Git 自身的用户身份和行为设置，与 `configs/` 下控制数据、模型和实验参数的 YAML 文件无关。
+
+命令中的 `Your Name`、`you@example.com`、`<commit-id>` 和 `<文件路径>` 都是需要替换的占位符；`--global` 表示设置应用于当前用户的全部 Git 仓库，不加时只读取或设置当前仓库。
+
 ## 首次配置
 
 确认 Git 用户信息；如果尚未配置，将示例内容替换为自己的姓名和邮箱：

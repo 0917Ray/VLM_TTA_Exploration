@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-项目目前包含数据集准备与可视化，以及 CLIP-RN50、CLIP-ViT-B/16 在四个 ImageNet Variants 上的 Pure CLIP zero-shot Top-1 评测。评测支持 YAML 配置、多 GPU 调度和结果汇总。
+项目目前包含数据集准备与可视化、Pure CLIP zero-shot 评测，以及 TPT 在四个 ImageNet Variants 上的图像分类实现。评测支持 YAML 配置、多 GPU 调度和结果汇总。
 
 原始数据、下载压缩包、模型权重和生成结果只保留在本地，不提交到 GitHub。
 
@@ -82,7 +82,7 @@ ImageNet-A/R 按官方协议使用各自的 200 类候选集合，ImageNet-V2/Sk
 ## 项目结构
 
 ```text
-configs/evaluation/      # Zero-shot 评测配置与 TPT 类别名称
+configs/evaluation/      # Zero-shot 与 TPT 评测配置
 configs/visualization/   # 可视化配置与 ImageNet 类别索引
 data/downloads/          # 数据集压缩包，不纳入 Git
 data/raw/                # 解压后的数据集，不纳入 Git
@@ -96,4 +96,5 @@ scripts/                 # 可执行脚本
 
 - [准备工作](guide/preparation.md)：环境安装、数据集下载与解压、目录要求和可视化。
 - [Pure CLIP Zero-shot 测试](guide/clip_test.md)：评测协议、配置、多 GPU 和输出说明。
+- [TPT 图像分类](guide/tpt_classification.md)：方法简介、论文设置、运行命令和输出说明。
 - [GitHub 同步教程](guide/github_sync.md)：代码提交与远程同步流程。

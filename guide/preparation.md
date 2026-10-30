@@ -197,22 +197,30 @@ python scripts/visualize_datasets.py \
 
 ## 配置文件
 
-`configs/visualization/datasets.yaml` 控制数据路径、抽样数量和画布样式。相对路径以项目根目录为基准。
+`configs/visualization/datasets.yaml` 控制数据路径、抽样数量和画布样式。相对路径以项目根目录为基准。当前配置的全部参数如下：
 
-| 参数 | 作用 |
-| --- | --- |
-| `data_root` | 数据集根目录，默认 `data/raw`。 |
-| `output_root` | 输出目录，默认 `runs/dataset_visualizations`。 |
-| `class_index` | ImageNet 类别映射文件，通常无需修改。 |
-| `datasets` | 要处理的数据集列表；可选 `imagenet`、`imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch`。 |
-| `num_classes` | 每个数据集抽取的类别数，每类 1 张图。 |
-| `rows` | 画布行数，列数自动计算。 |
-| `seed` | 随机种子，用于复现抽样结果。 |
-| `figsize`、`dpi` | 画布尺寸和 PNG 分辨率。 |
-| `show_title`、`show_figure_title` | 是否显示类别名称和总标题。 |
-| `font_size`、`title_font_size` | 类别名称和总标题字号。 |
-| `border_width`、`border_color` | 图片边框宽度和颜色；宽度设为 `0` 可隐藏边框。 |
-| `title_pad`、`figure_title_pad`、`pad_inches` | 标题间距和保存时的外侧留白。 |
+| 参数 | 当前值 | 作用 |
+| --- | --- | --- |
+| `data_root` | `data/raw` | 数据集根目录；脚本会在其下查找各个 `datasets` 子目录。 |
+| `output_root` | `runs/dataset_visualizations` | 可视化输出根目录；每个数据集写入一个同名子目录。 |
+| `class_index` | `configs/visualization/imagenet_class_index.json` | 1000 类 ImageNet 索引、WNID 和显示名称的映射文件，用于把目录名转换为图片标题。 |
+| `datasets` | `imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch` | 按列表顺序生成画廊。还支持 `imagenet`；列表不能为空且只能包含脚本支持的数据集名称。 |
+| `num_classes` | `10` | 每个数据集随机抽取的类别数；每个被抽中的类别展示 1 张图片，必须大于 0。 |
+| `rows` | `1` | 联系表的行数；列数由抽取类别数自动计算，必须大于 0。 |
+| `seed` | `42` | 类别和图片抽样的基础随机种子。各数据集实际使用 `seed + 数据集在列表中的序号`，以便复现又避免完全相同的抽样序列。 |
+| `dpi` | `300` | 保存 PNG 时的每英寸像素数；值越高，位图文件通常越大。PDF 为矢量输出，不使用该值决定清晰度。 |
+| `figsize` | `[15, 3]` | Matplotlib 画布的 `[宽, 高]`，单位为英寸；两个值都必须大于 0。 |
+| `font_size` | `10` | 每张图片上方类别名称的字号。 |
+| `title_font_size` | `14` | 整张联系表总标题的字号，仅在 `show_figure_title: true` 时可见。 |
+| `show_title` | `true` | 是否显示每张图片的类别名称；关闭后也会缩小图片行间距。 |
+| `title_pad` | `5` | 类别名称与对应图片之间的间距，单位为 point，必须为非负数。 |
+| `show_figure_title` | `false` | 是否在联系表顶部显示数据集总标题。 |
+| `figure_title_pad` | `8` | 总标题下方预留的间距，单位为 point，必须为非负数。 |
+| `border_width` | `2.2` | 每张图片边框的线宽；设为 `0` 隐藏边框，不能为负数。 |
+| `border_color` | `#3A3D42` | 图片边框颜色，接受 Matplotlib 支持的颜色名称或颜色值。 |
+| `pad_inches` | `0.05` | 使用紧边界保存 PNG/PDF 时，画布四周额外保留的英寸数，不能为负数。 |
+
+同名命令行参数会临时覆盖 YAML，例如 `--dpi 180` 或 `--no-show-title`；它们不会修改配置文件本身。
 
 ## 输出
 
