@@ -1,174 +1,115 @@
-# GitHub 同步教程
+# GitHub 同步
 
-本项目的 GitHub 仓库为：
+本指南只同步代码、配置和文档。数据、模型权重和实验输出保留在本机，不能提交。
+
+仓库远程地址：
 
 ```text
 git@github.com:0917Ray/VLM_TTA_Exploration.git
 ```
 
-以下命令均在项目根目录执行。
+## 首次设置
 
-## 关于配置文件
-
-本教程没有对应的 YAML 实验配置文件，因为 Git 同步操作不是本仓库中的评测任务。下文的 `git config` 是 Git 自身的用户身份和行为设置，与 `configs/` 下控制数据、模型和实验参数的 YAML 文件无关。
-
-命令中的 `Your Name`、`you@example.com`、`<commit-id>` 和 `<文件路径>` 都是需要替换的占位符；`--global` 表示设置应用于当前用户的全部 Git 仓库，不加时只读取或设置当前仓库。
-
-## 首次配置
-
-确认 Git 用户信息；如果尚未配置，将示例内容替换为自己的姓名和邮箱：
+在仓库根目录查看身份和远程：
 
 ```bash
 git config user.name
 git config user.email
+git remote -v
+```
+
+如尚未配置身份：
+
+```bash
 git config --global user.name "Your Name"
 git config --global user.email "you@example.com"
 ```
 
-初始化仓库并关联 GitHub：
+已有本地 Git 仓库时不要再次执行 `git init`。仅当 `git remote -v` 没有 `origin` 时添加远程：
 
 ```bash
-git init -b main
 git remote add origin git@github.com:0917Ray/VLM_TTA_Exploration.git
 ```
 
-可以用下面的命令检查远程地址：
+## 日常提交
 
-```bash
-git remote -v
-```
-
-## 日常同步流程
-
-### 1. 查看改动
+先检查状态和差异：
 
 ```bash
 git status --short
 git diff
-```
-
-提交前应确认没有数据集、模型权重、运行结果、密钥或其他大文件。项目的
-`.gitignore` 已默认忽略 `data/downloads/`、`data/raw/`、`models/` 和 `runs/`。
-
-查看即将加入版本控制的文件：
-
-```bash
 git add --dry-run .
 ```
 
-### 2. 暂存并提交
+确认没有数据、模型、运行结果、密钥或大文件后再提交：
 
 ```bash
-git add .
+git add README.md guide configs scripts pyproject.toml requirements.txt
 git status --short
-git commit -m "描述本阶段完成的工作"
+git commit -m "Describe the change"
 ```
 
-推荐让每次提交只对应一个明确阶段，例如：
+按实际修改调整 `git add` 路径；提交前检查暂存内容。
 
-```text
-Prepare datasets and add visualization review
-Add zero-shot CLIP evaluation pipeline
-Record baseline evaluation results
-```
-
-### 3. 推送到 GitHub
-
-首次推送并建立上游分支：
+首次推送：
 
 ```bash
 git push -u origin main
 ```
 
-后续推送可以简化为：
+之后：
 
 ```bash
 git push
 ```
 
-## 在同步前获取远程更新
+## 获取远端更新
 
-多人或多台机器修改同一仓库时，先获取并以 rebase 方式整合远程提交：
+推送前先整合远端变更：
 
 ```bash
 git fetch origin
 git pull --rebase origin main
 ```
 
-如果出现冲突，打开冲突文件并保留正确内容，然后继续：
+发生冲突时，编辑冲突文件并确认内容，然后：
 
 ```bash
-git add <已解决的文件>
+git add README.md
 git rebase --continue
 ```
 
-需要取消本次 rebase 时运行：
+取消本次 rebase：
 
 ```bash
 git rebase --abort
 ```
 
-确认本地状态正常后再推送：
+确认状态后再推送：
 
 ```bash
 git status
 git push
 ```
 
-## 检查历史
+## 文件保护
 
-查看最近提交和分支关系：
-
-```bash
-git log --oneline --graph --decorate -10
-git branch -vv
-```
-
-查看某次提交包含的文件和改动统计：
+`.gitignore` 已忽略 `data/downloads/`、`data/raw/`、`models/` 和 `runs/`。已被 Git 跟踪的文件不会因新增 ignore 规则自动取消跟踪；需要从索引移除但保留本地文件时：
 
 ```bash
-git show --stat <commit-id>
+git rm --cached README.md
 ```
 
-## 大文件与数据集
+不要用 `git push --force` 覆盖共享历史。确需改写时，先确认影响范围并使用 `--force-with-lease`。
 
-GitHub 普通 Git 仓库不适合保存原始数据集、压缩包、模型权重和大量实验输出。
-本项目只同步复现实验所需的代码、配置与文档；数据和权重应根据
-`guide/preparation.md` 在每台机器上单独准备。
-
-如果某个本应忽略的文件已经被 Git 跟踪，仅修改 `.gitignore` 不会自动移除它。
-可以只从 Git 索引中取消跟踪，同时保留本地文件：
-
-```bash
-git rm --cached <文件路径>
-git commit -m "Stop tracking generated file"
-```
-
-不要使用 `git push --force` 覆盖共享分支历史。如确实需要改写远程历史，应先确认
-影响范围，并优先使用带保护检查的 `git push --force-with-lease`。
-
-## 常见问题
-
-### SSH 身份验证失败
-
-先测试当前 SSH 配置：
+SSH 验证失败时可检查：
 
 ```bash
 ssh -T git@github.com
 ```
 
-如果本机还没有 SSH 密钥，按照 GitHub 的 SSH key 文档创建公钥，并将公钥添加到
-GitHub 账号。也可以将远程地址切换为 HTTPS：
+也可以改用 HTTPS：
 
 ```bash
 git remote set-url origin https://github.com/0917Ray/VLM_TTA_Exploration.git
-```
-
-### 推送被拒绝
-
-远程分支包含本地没有的提交时，先整合远程更新再推送：
-
-```bash
-git pull --rebase origin main
-git push
 ```

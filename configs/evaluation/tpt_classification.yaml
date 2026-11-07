@@ -23,7 +23,13 @@ seeds:
   - 123
 num_workers: 4
 views: 64
-selection_fraction: 0.1
+selection_fractions: true
+fraction_options: [0.1]
+selection_counts: false
+count_options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+augment: true
+only_origin: false
+top_k: 5
 tta_steps: 1
 learning_rate: 0.005
 prompt_init: "a photo of a"
@@ -31,3 +37,6 @@ resolution: 224
 print_frequency: 100
 limit: null
 log_file: run.log
+plot:
+  enabled: false
+  config: configs/visualization/tpt_selection_fraction_plots.json

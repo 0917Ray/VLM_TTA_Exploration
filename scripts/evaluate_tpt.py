@@ -36,8 +36,10 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 CONFIG_KEYS = {
     "data_root", "class_index", "class_names", "model_root", "output_root", "idea",
     "datasets", "models", "devices", "device", "seeds", "seed", "num_workers", "views",
-    "selection_fraction", "tta_steps", "learning_rate", "prompt_init", "resolution",
-    "print_frequency", "limit", "log_file",
+    "selection_fraction", "selection_fractions", "selection_counts", "fraction_options",
+    "count_options", "only_origin", "augment",
+    "top_k", "tta_steps", "learning_rate",
+    "prompt_init", "resolution", "print_frequency", "limit", "log_file", "plot",
 }
 DEFAULTS = {
     "data_root": "data/raw",
@@ -53,6 +55,13 @@ DEFAULTS = {
     "num_workers": min(4, os.cpu_count() or 1),
     "views": 64,
     "selection_fraction": 0.1,
+    "selection_fractions": True,
+    "selection_counts": False,
+    "fraction_options": None,
+    "count_options": None,
+    "only_origin": False,
+    "augment": True,
+    "top_k": 5,
     "tta_steps": 1,
     "learning_rate": 5e-3,
     "prompt_init": "a photo of a",
@@ -60,6 +69,7 @@ DEFAULTS = {
     "print_frequency": 100,
     "limit": None,
     "log_file": "run.log",
+    "plot": {"enabled": False, "config": None},
 }
 
 
@@ -74,11 +84,23 @@ class Result:
     correct_top5: int
     top1_accuracy: float
     top5_accuracy: float
+    topk_correct: list[int]
+    topk_accuracy: list[float]
+    zero_shot_correct_top1: int
+    zero_shot_correct_top5: int
+    zero_shot_top1_accuracy: float
+    zero_shot_top5_accuracy: float
+    zero_shot_topk_correct: list[int]
+    zero_shot_topk_accuracy: list[float]
     candidate_classes: int
     class_names_source: str
     prompt_init: str
     views: int
     selection_fraction: float
+    selection_count: int
+    augment: bool
+    only_origin: bool
+    selected_views: int
     tta_steps: int
     learning_rate: float
     seed: int
@@ -89,7 +111,7 @@ class Result:
 class TPTTransform:
     """Return the canonical CLIP view followed by stochastic TPT views."""
 
-    def __init__(self, resolution: int, views: int):
+    def __init__(self, resolution: int, views: int, augment: bool = True):
         normalize = transforms.Normalize(
             mean=(0.48145466, 0.4578275, 0.40821073),
             std=(0.26862954, 0.26130258, 0.27577711),
@@ -105,7 +127,7 @@ class TPTTransform:
             transforms.RandomHorizontalFlip(),
         ])
         self.preprocess = transforms.Compose([transforms.ToTensor(), normalize])
-        self.views = views
+        self.views = views if augment else 1
 
     def __call__(self, image: Image.Image) -> list[torch.Tensor]:
         output = [self.canonical(image)]
@@ -240,7 +262,7 @@ class TPTClassifier(nn.Module):
 
 def select_confident_samples(logits: torch.Tensor, fraction: float) -> tuple[torch.Tensor, torch.Tensor]:
     entropy = -(logits.softmax(dim=1) * logits.log_softmax(dim=1)).sum(dim=1)
-    count = int(logits.shape[0] * fraction)
+    count = max(1, int(logits.shape[0] * fraction))
     indices = torch.argsort(entropy)[:count]
     return logits[indices], indices
 
@@ -257,10 +279,13 @@ def average_entropy(logits: torch.Tensor) -> torch.Tensor:
 def tune_prompt(model: TPTClassifier, views: torch.Tensor, optimizer, scaler,
                 selection_fraction: float, tta_steps: int, device: torch.device):
     selected_indices = None
+    initial_canonical_logits = None
     for _ in range(tta_steps):
         with torch.autocast(device_type=device.type, dtype=torch.float16,
                             enabled=device.type == "cuda"):
             logits = model(views)
+            if initial_canonical_logits is None:
+                initial_canonical_logits = logits[:1].detach()
             if selected_indices is None:
                 logits, selected_indices = select_confident_samples(logits, selection_fraction)
             else:
@@ -270,6 +295,7 @@ def tune_prompt(model: TPTClassifier, views: torch.Tensor, optimizer, scaler,
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+    return initial_canonical_logits
 
 
 def load_config(path: Path) -> dict:
@@ -313,7 +339,12 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
     seed_group.add_argument("--seed", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--views", type=int)
-    parser.add_argument("--selection-fraction", type=float)
+    parser.add_argument("--top-k", type=int)
+    parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=None)
+    selection_group = parser.add_mutually_exclusive_group()
+    selection_group.add_argument("--selection-fraction", type=float)
+    selection_group.add_argument("--selection-fractions", type=float, nargs="+")
+    selection_group.add_argument("--selection-counts", type=int, nargs="+")
     parser.add_argument("--tta-steps", type=int)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--prompt-init")
@@ -324,6 +355,16 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
 
     config_path = resolve_path(cli.config)
     config = load_config(config_path)
+    if isinstance(config.get("selection_fractions"), list):
+        if "fraction_options" in config:
+            raise SystemExit("Use either legacy selection_fractions list or fraction_options")
+        config["fraction_options"] = config.pop("selection_fractions")
+        config["selection_fractions"] = True
+    if isinstance(config.get("selection_counts"), list):
+        if "count_options" in config:
+            raise SystemExit("Use either legacy selection_counts list or count_options")
+        config["count_options"] = config.pop("selection_counts")
+        config["selection_counts"] = True
     if "device" in config:
         if "devices" in config:
             raise SystemExit("Config cannot contain both device and devices")
@@ -334,7 +375,10 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
         config["seeds"] = [config.pop("seed")]
     values = dict(DEFAULTS)
     values.update(config)
-    for key in CONFIG_KEYS - {"log_file", "device", "seed"}:
+    for key in CONFIG_KEYS - {
+        "log_file", "device", "seed", "selection_counts", "selection_fractions",
+        "fraction_options", "count_options", "only_origin", "augment", "top_k",
+    }:
         value = getattr(cli, key, None)
         if value is not None:
             values[key] = value
@@ -342,6 +386,24 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
         values["devices"] = [cli.device]
     if cli.seed is not None:
         values["seeds"] = [cli.seed]
+    if cli.selection_fraction is not None:
+        values["selection_fraction"] = cli.selection_fraction
+        values["selection_fractions"] = True
+        values["selection_counts"] = False
+        values["fraction_options"] = [cli.selection_fraction]
+    if cli.selection_fractions is not None:
+        values["selection_fractions"] = True
+        values["selection_counts"] = False
+        values["fraction_options"] = cli.selection_fractions
+    if cli.selection_counts is not None:
+        values["selection_counts"] = True
+        values["selection_fractions"] = False
+        values["count_options"] = cli.selection_counts
+    if cli.top_k is not None:
+        values["top_k"] = cli.top_k
+    if cli.augment is not None:
+        values["augment"] = cli.augment
+        values["only_origin"] = not cli.augment
     for key in ("data_root", "class_index", "class_names", "model_root", "output_root"):
         values[key] = resolve_path(values[key])
 
@@ -378,12 +440,54 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
         raise SystemExit("seeds must not contain duplicates")
     if values["num_workers"] < 0:
         raise SystemExit("num_workers must be non-negative")
-    if values["views"] < 2:
-        raise SystemExit("views must be at least 2")
-    if not 0 < values["selection_fraction"] <= 1:
-        raise SystemExit("selection_fraction must be in (0, 1]")
-    if int(values["views"] * values["selection_fraction"]) < 1:
-        raise SystemExit("views * selection_fraction must select at least one view")
+    if not isinstance(values["only_origin"], bool) or not isinstance(values["augment"], bool):
+        raise SystemExit("only_origin and augment must be true or false")
+    if values["views"] < 1 or (values["augment"] and values["views"] < 2):
+        raise SystemExit("views must be at least 2 with augmentation, otherwise at least 1")
+    if not isinstance(values["top_k"], int) or values["top_k"] < 1:
+        raise SystemExit("top_k must be a positive integer")
+    fraction_mode = values["selection_fractions"]
+    count_mode = values["selection_counts"]
+    if not isinstance(fraction_mode, bool) or not isinstance(count_mode, bool):
+        raise SystemExit("selection_fractions and selection_counts must be true or false")
+    if fraction_mode == count_mode:
+        raise SystemExit("Set exactly one of selection_fractions or selection_counts to true")
+    if "selection_fraction" in config and "fraction_options" not in config:
+        values["fraction_options"] = [values["selection_fraction"]]
+    if count_mode:
+        selection_counts = values["count_options"]
+        if (not isinstance(selection_counts, list) or not selection_counts or
+                any(not isinstance(count, int) or isinstance(count, bool) for count in selection_counts)):
+            raise SystemExit("count_options must be a non-empty list of integers")
+        max_count = values["views"] if values["augment"] else 1
+        if len(set(selection_counts)) != len(selection_counts) or any(count < 1 or count > max_count for count in selection_counts):
+            if not values["augment"]:
+                raise SystemExit(
+                    "augment=false leaves one view per image, so count_options can only be [1]. "
+                    "Set augment=true to sweep counts from 1 to 10; use only_origin=true "
+                    "to add an origin-only baseline alongside that sweep."
+                )
+            raise SystemExit(f"count_options must be unique and between 1 and {max_count}")
+        selection_fractions = [count / max_count for count in selection_counts]
+        values["selection_count_mode"] = True
+    else:
+        selection_fractions = values["fraction_options"]
+        if selection_fractions is None:
+            selection_fractions = [1.0 if values["only_origin"] else values["selection_fraction"]]
+        values["selection_count_mode"] = False
+    if (not isinstance(selection_fractions, list) or not selection_fractions or
+            any(isinstance(fraction, bool) or not isinstance(fraction, (int, float))
+                for fraction in selection_fractions)):
+        raise SystemExit("fraction_options must be a non-empty list of numbers")
+    selection_fractions = [float(fraction) for fraction in selection_fractions]
+    if len(set(selection_fractions)) != len(selection_fractions):
+        raise SystemExit("selection_fractions must not contain duplicates")
+    if any(not 0 < fraction <= 1 for fraction in selection_fractions):
+        raise SystemExit("every selection fraction must be in (0, 1]")
+    if any(int((values["views"] if values["augment"] else 1) * fraction) < 1 for fraction in selection_fractions):
+        raise SystemExit("views * every selection fraction must select at least one view")
+    values["selection_values"] = selection_fractions
+    values["selection_fraction"] = selection_fractions[0]
     if values["tta_steps"] < 1 or values["learning_rate"] <= 0:
         raise SystemExit("tta_steps and learning_rate must be positive")
     if values["resolution"] < 1 or values["print_frequency"] < 1:
@@ -392,6 +496,21 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
         raise SystemExit("prompt_init must be a non-empty string")
     if values["limit"] is not None and values["limit"] < 1:
         raise SystemExit("limit must be positive")
+    plot = values["plot"]
+    if not isinstance(plot, dict) or set(plot) - {"enabled", "config"}:
+        raise SystemExit("plot must contain only enabled and config")
+    plot = {**DEFAULTS["plot"], **plot}
+    if not isinstance(plot["enabled"], bool):
+        raise SystemExit("plot.enabled must be true or false")
+    if plot["config"] is not None:
+        if not isinstance(plot["config"], (str, Path)):
+            raise SystemExit("plot.config must be a path or null")
+        plot["config"] = resolve_path(plot["config"])
+    if plot["enabled"] and plot["config"] is None:
+        raise SystemExit("plot.config is required when plot.enabled is true")
+    if plot["enabled"] and not plot["config"].is_file():
+        raise SystemExit(f"Plot config file does not exist: {plot['config']}")
+    values["plot"] = plot
     return argparse.Namespace(**values), config_path
 
 
@@ -478,8 +597,18 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+def accumulate_topk_correct(logits: torch.Tensor, labels: torch.Tensor,
+                            global_indices: torch.Tensor, counts: list[int]) -> None:
+    local_topk = logits.topk(k=min(len(counts), logits.shape[1]), dim=1).indices
+    predictions = global_indices[local_topk]
+    matches = predictions == labels.unsqueeze(1)
+    for index in range(predictions.shape[1]):
+        counts[index] += int(matches[:, :index + 1].any(dim=1).sum().item())
+
+
 def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed: int,
-                 device_name: str, progress_position: int, log_path: str) -> dict:
+                 selection_fraction: float, device_name: str, progress_position: int,
+                 log_path: str, origin_only_job: bool = False) -> dict:
     logger = setup_worker_logging(log_path)
     args = argparse.Namespace(**serialized_args)
     device = torch.device(device_name)
@@ -487,13 +616,23 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
         torch.cuda.set_device(device)
     set_seed(seed)
     torch.backends.cudnn.benchmark = True
-    logger.info("starting %s / %s / seed=%d on %s", model_name, dataset_name, seed, device)
+    origin_only_job = origin_only_job or not args.augment
+    selected_view_count = max(1, int(args.views * selection_fraction))
+    mode_label = (
+        "Only origin" if origin_only_job else
+        f"count={selected_view_count}" if args.selection_count_mode else
+        f"fraction={selection_fraction:.2%}"
+    )
+    logger.info(
+        "starting %s / %s / seed=%d / %s on %s",
+        model_name, dataset_name, seed, mode_label, device,
+    )
 
     import clip
 
     class_index = load_class_index(args.class_index)
     all_names = load_class_names(args.class_names)
-    transform = TPTTransform(args.resolution, args.views)
+    transform = TPTTransform(args.resolution, args.views, args.augment and not origin_only_job)
     full_dataset = VariantDataset(
         args.data_root / dataset_name, dataset_name, class_index, transform
     )
@@ -531,14 +670,16 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
         loader_kwargs["multiprocessing_context"] = "spawn"
     loader = DataLoader(dataset, **loader_kwargs)
     global_indices = torch.tensor(candidate_indices, device=device)
-    correct_top1 = 0
-    correct_top5 = 0
+    reported_k = max(args.top_k, 5)
+    correct_topk = [0] * reported_k
+    zero_shot_correct_topk = [0] * reported_k
     samples = 0
     started = time.perf_counter()
 
     progress = tqdm(
         loader,
-        desc=f"{device} / seed={seed} / {model_name} / {dataset_name}",
+        desc=(f"{device} / {mode_label} / seed={seed} / "
+              f"{model_name} / {dataset_name}"),
         unit="image",
         position=progress_position,
         leave=True,
@@ -549,18 +690,19 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
         with torch.no_grad():
             model.reset()
         optimizer.state.clear()
-        tune_prompt(
-            model, views, optimizer, scaler, args.selection_fraction, args.tta_steps, device
+        tune_fraction = 1.0 if origin_only_job else selection_fraction
+        zero_shot_logits = tune_prompt(
+            model, views, optimizer, scaler, tune_fraction, args.tta_steps, device
         )
         with torch.no_grad(), torch.autocast(
                 device_type=device.type, dtype=torch.float16, enabled=device.type == "cuda"):
             logits = model(views[:1])
-        local_top5 = logits.topk(k=min(5, len(candidate_indices)), dim=1).indices
-        predictions = global_indices[local_top5]
-        correct_top1 += int((predictions[:, 0] == labels).sum().item())
-        correct_top5 += int((predictions == labels.unsqueeze(1)).any(dim=1).sum().item())
+        accumulate_topk_correct(logits, labels, global_indices, correct_topk)
+        accumulate_topk_correct(
+            zero_shot_logits, labels, global_indices, zero_shot_correct_topk
+        )
         samples += labels.numel()
-        accuracy = 100 * correct_top1 / samples
+        accuracy = 100 * correct_topk[0] / samples
         progress.set_postfix(top1=f"{accuracy:.2f}%")
         if samples % args.print_frequency == 0 or samples == len(dataset):
             logger.info("progress %d/%d top1=%.4f%%", samples, len(dataset), accuracy)
@@ -572,24 +714,42 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
         model=model_name,
         dataset=dataset_name,
         samples=samples,
-        correct_top1=correct_top1,
-        correct_top5=correct_top5,
-        top1_accuracy=correct_top1 / samples,
-        top5_accuracy=correct_top5 / samples,
+        correct_top1=correct_topk[0],
+        correct_top5=correct_topk[4],
+        top1_accuracy=correct_topk[0] / samples,
+        top5_accuracy=correct_topk[4] / samples,
+        topk_correct=correct_topk[:args.top_k],
+        topk_accuracy=[count / samples for count in correct_topk[:args.top_k]],
+        zero_shot_correct_top1=zero_shot_correct_topk[0],
+        zero_shot_correct_top5=zero_shot_correct_topk[4],
+        zero_shot_top1_accuracy=zero_shot_correct_topk[0] / samples,
+        zero_shot_top5_accuracy=zero_shot_correct_topk[4] / samples,
+        zero_shot_topk_correct=zero_shot_correct_topk[:args.top_k],
+        zero_shot_topk_accuracy=[
+            count / samples for count in zero_shot_correct_topk[:args.top_k]
+        ],
         candidate_classes=len(candidate_indices),
         class_names_source=args.class_names.name,
         prompt_init=args.prompt_init,
-        views=args.views,
-        selection_fraction=args.selection_fraction,
+        views=1 if origin_only_job else args.views,
+        selection_fraction=0.0 if origin_only_job else selection_fraction,
+        selection_count=0 if origin_only_job else selected_view_count,
+        augment=not origin_only_job,
+        only_origin=origin_only_job,
+        selected_views=1 if origin_only_job else selected_view_count,
         tta_steps=args.tta_steps,
         learning_rate=args.learning_rate,
         seed=seed,
         device=str(device),
         elapsed_minutes=elapsed / 60,
     )
-    logger.info("completed %s / %s / seed=%d: top1=%.4f%% top5=%.4f%% in %.2f min",
-                model_name, dataset_name, seed, 100 * result.top1_accuracy,
-                100 * result.top5_accuracy, result.elapsed_minutes)
+    logger.info(
+        "completed %s / %s / seed=%d / %s: "
+        "top1=%.4f%% top5=%.4f%% in %.2f min",
+        model_name, dataset_name, seed,
+        "Only origin" if result.only_origin else mode_label,
+        100 * result.top1_accuracy, 100 * result.top5_accuracy, result.elapsed_minutes,
+    )
     return asdict(result)
 
 
@@ -603,30 +763,92 @@ def write_results(results: list[Result], output_root: Path):
         writer.writerows(asdict(result) for result in results)
 
 
-def write_average_results(results: list[Result], output_root: Path,
-                          models: list[str], datasets: list[str]):
+def write_average_results(results: list[Result], output_root: Path, models: list[str],
+                          datasets: list[str], selection_fractions: list[float]) -> list[dict]:
     output_root.mkdir(parents=True, exist_ok=True)
     averages = []
+
+    def summarize(group: list[Result], fraction: float) -> dict:
+        return {
+            "idea": group[0].idea,
+            "model": group[0].model,
+            "dataset": group[0].dataset,
+            "selection_fraction": fraction,
+            "selection_count": group[0].selection_count,
+            "augment": group[0].augment,
+            "only_origin": group[0].only_origin,
+            "selected_views": group[0].selected_views,
+            "views": group[0].views,
+            "num_seeds": len(group),
+            "seeds": [result.seed for result in group],
+            "samples_per_seed": group[0].samples,
+            "average_top1_accuracy": statistics.fmean(r.top1_accuracy for r in group),
+            "std_top1_accuracy": statistics.pstdev(r.top1_accuracy for r in group),
+            "average_top5_accuracy": statistics.fmean(r.top5_accuracy for r in group),
+            "std_top5_accuracy": statistics.pstdev(r.top5_accuracy for r in group),
+            "average_zero_shot_top1_accuracy": statistics.fmean(
+                r.zero_shot_top1_accuracy for r in group
+            ),
+            "std_zero_shot_top1_accuracy": statistics.pstdev(
+                r.zero_shot_top1_accuracy for r in group
+            ),
+            "average_zero_shot_top5_accuracy": statistics.fmean(
+                r.zero_shot_top5_accuracy for r in group
+            ),
+            "std_zero_shot_top5_accuracy": statistics.pstdev(
+                r.zero_shot_top5_accuracy for r in group
+            ),
+            **{
+                f"average_top{index + 1}_accuracy": statistics.fmean(
+                    result.topk_accuracy[index] for result in group
+                )
+                for index in range(len(group[0].topk_accuracy))
+            },
+            **{
+                f"std_top{index + 1}_accuracy": statistics.pstdev(
+                    result.topk_accuracy[index] for result in group
+                )
+                for index in range(len(group[0].topk_accuracy))
+            },
+            **{
+                f"average_zero_shot_top{index + 1}_accuracy": statistics.fmean(
+                    result.zero_shot_topk_accuracy[index] for result in group
+                )
+                for index in range(len(group[0].zero_shot_topk_accuracy))
+            },
+            **{
+                f"std_zero_shot_top{index + 1}_accuracy": statistics.pstdev(
+                    result.zero_shot_topk_accuracy[index] for result in group
+                )
+                for index in range(len(group[0].zero_shot_topk_accuracy))
+            },
+            "average_elapsed_minutes": statistics.fmean(r.elapsed_minutes for r in group),
+        }
+
     for model_name in models:
         for dataset_name in datasets:
-            group = [result for result in results
-                     if result.model == model_name and result.dataset == dataset_name]
-            top1 = [result.top1_accuracy for result in group]
-            top5 = [result.top5_accuracy for result in group]
-            elapsed_minutes = [result.elapsed_minutes for result in group]
-            averages.append({
-                "idea": results[0].idea,
-                "model": model_name,
-                "dataset": dataset_name,
-                "num_seeds": len(group),
-                "seeds": [result.seed for result in group],
-                "samples_per_seed": group[0].samples,
-                "average_top1_accuracy": statistics.fmean(top1),
-                "std_top1_accuracy": statistics.pstdev(top1),
-                "average_top5_accuracy": statistics.fmean(top5),
-                "std_top5_accuracy": statistics.pstdev(top5),
-                "average_elapsed_minutes": statistics.fmean(elapsed_minutes),
-            })
+            for selection_fraction in selection_fractions:
+                group = [
+                    result for result in results
+                    if (not result.only_origin and result.model == model_name and
+                        result.dataset == dataset_name and
+                        result.selection_fraction == selection_fraction)
+                ]
+                if not group:
+                    raise ValueError(
+                        f"Missing results for {model_name}, {dataset_name}, "
+                        f"selection_fraction={selection_fraction}"
+                    )
+                averages.append(summarize(group, selection_fraction))
+    if any(result.only_origin for result in results):
+        for model_name in models:
+            for dataset_name in datasets:
+                group = [
+                    result for result in results
+                    if result.only_origin and result.model == model_name and result.dataset == dataset_name
+                ]
+                if group:
+                    averages.append(summarize(group, 0.0))
     with (output_root / "average_results.json").open("w", encoding="utf-8") as stream:
         json.dump(averages, stream, indent=2, ensure_ascii=False)
     csv_rows = [{**row, "seeds": " ".join(map(str, row["seeds"]))} for row in averages]
@@ -635,38 +857,163 @@ def write_average_results(results: list[Result], output_root: Path,
         writer.writeheader()
         writer.writerows(csv_rows)
 
-    by_pair = {(row["model"], row["dataset"]): row for row in averages}
+    by_key = {
+        (row["model"], row["dataset"], row["selection_fraction"]): row
+        for row in averages
+    }
     lines = ["# TPT Average Top-1 Accuracy", ""]
     if results[0].idea is not None:
         lines.extend([f"Idea: `{results[0].idea}`", ""])
     lines.extend([
         "Values are mean +/- population standard deviation across seeds.", "",
-        "| Model | " + " | ".join(datasets) + " |",
-        "| --- | " + " | ".join("---:" for _ in datasets) + " |",
+        "| Model | Selection fraction | " + " | ".join(datasets) + " |",
+        "| --- | ---: | " + " | ".join("---:" for _ in datasets) + " |",
     ])
     for model_name in models:
-        cells = []
-        for dataset_name in datasets:
-            row = by_pair[(model_name, dataset_name)]
-            cells.append(
-                f"{100 * row['average_top1_accuracy']:.4f}% +/- "
-                f"{100 * row['std_top1_accuracy']:.4f}%"
+        for selection_fraction in selection_fractions:
+            cells = []
+            for dataset_name in datasets:
+                row = by_key[(model_name, dataset_name, selection_fraction)]
+                cells.append(
+                    f"{100 * row['average_top1_accuracy']:.4f}% +/- "
+                    f"{100 * row['std_top1_accuracy']:.4f}%"
+                )
+            lines.append(
+                f"| {model_name} | {100 * selection_fraction:.0f}% | "
+                + " | ".join(cells) + " |"
             )
-        lines.append(f"| {model_name} | " + " | ".join(cells) + " |")
     lines.append("")
     lines.extend([
         "## Average Runtime (minutes)", "",
-        "| Model | " + " | ".join(datasets) + " |",
-        "| --- | " + " | ".join("---:" for _ in datasets) + " |",
+        "| Model | Selection fraction | " + " | ".join(datasets) + " |",
+        "| --- | ---: | " + " | ".join("---:" for _ in datasets) + " |",
     ])
     for model_name in models:
-        cells = [
-            f"{by_pair[(model_name, dataset_name)]['average_elapsed_minutes']:.2f}"
-            for dataset_name in datasets
-        ]
-        lines.append(f"| {model_name} | " + " | ".join(cells) + " |")
+        for selection_fraction in selection_fractions:
+            cells = [
+                f"{by_key[(model_name, dataset_name, selection_fraction)]['average_elapsed_minutes']:.2f}"
+                for dataset_name in datasets
+            ]
+            lines.append(
+                f"| {model_name} | {100 * selection_fraction:.0f}% | "
+                + " | ".join(cells) + " |"
+            )
     lines.append("")
     (output_root / "average_results.md").write_text("\n".join(lines), encoding="utf-8")
+    return averages
+
+
+def write_selection_fraction_results(averages: list[dict], output_root: Path) -> Path:
+    rows = []
+    for average in averages:
+        top_indices = sorted(
+            int(key[len("average_top"):-len("_accuracy")])
+            for key in average
+            if key.startswith("average_top") and key.endswith("_accuracy")
+        )
+        zero_shot_top_indices = sorted(
+            int(key[len("average_zero_shot_top"):-len("_accuracy")])
+            for key in average
+            if key.startswith("average_zero_shot_top") and key.endswith("_accuracy")
+        )
+        rows.append({
+            "idea": average["idea"],
+            "model": average["model"],
+            "dataset": average["dataset"],
+            "selection_fraction": average["selection_fraction"],
+            "selection_percent": 100 * average["selection_fraction"],
+            "selected_views": average["selected_views"],
+            "selection_count": average["selection_count"],
+            "augment": average["augment"],
+            "only_origin": average["only_origin"],
+            "views": average["views"],
+            "num_seeds": average["num_seeds"],
+            "seeds": average["seeds"],
+            "samples_per_seed": average["samples_per_seed"],
+            "top1_accuracy": average["average_top1_accuracy"],
+            "top1_accuracy_percent": 100 * average["average_top1_accuracy"],
+            "top1_std": average["std_top1_accuracy"],
+            "top1_std_percent": 100 * average["std_top1_accuracy"],
+            "top5_accuracy": average["average_top5_accuracy"],
+            "top5_accuracy_percent": 100 * average["average_top5_accuracy"],
+            "top5_std": average["std_top5_accuracy"],
+            "top5_std_percent": 100 * average["std_top5_accuracy"],
+            "zero_shot_top1_accuracy_percent": 100 * average["average_zero_shot_top1_accuracy"],
+            "zero_shot_top1_std_percent": 100 * average["std_zero_shot_top1_accuracy"],
+            "zero_shot_top5_accuracy_percent": 100 * average["average_zero_shot_top5_accuracy"],
+            "zero_shot_top5_std_percent": 100 * average["std_zero_shot_top5_accuracy"],
+            **{
+                f"top{index}_accuracy_percent": 100 * average[f"average_top{index}_accuracy"]
+                for index in top_indices
+            },
+            **{
+                f"top{index}_std_percent": 100 * average[f"std_top{index}_accuracy"]
+                for index in top_indices
+            },
+            **{
+                f"zero_shot_top{index}_accuracy_percent": 100 * average[
+                    f"average_zero_shot_top{index}_accuracy"
+                ]
+                for index in zero_shot_top_indices
+            },
+            **{
+                f"zero_shot_top{index}_std_percent": 100 * average[
+                    f"std_zero_shot_top{index}_accuracy"
+                ]
+                for index in zero_shot_top_indices
+            },
+            "average_elapsed_minutes": average["average_elapsed_minutes"],
+        })
+
+    json_path = output_root / "selection_fraction_results.json"
+    with json_path.open("w", encoding="utf-8") as stream:
+        json.dump(rows, stream, indent=2, ensure_ascii=False)
+
+    csv_rows = [{**row, "seeds": " ".join(map(str, row["seeds"]))} for row in rows]
+    csv_path = output_root / "selection_fraction_results.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(csv_rows[0]))
+        writer.writeheader()
+        writer.writerows(csv_rows)
+
+    chart_fields = [
+        "model", "dataset", "selection_fraction", "selection_percent", "selection_count",
+        "selected_views", "views", "augment", "only_origin", "top1_accuracy_percent", "top1_std_percent", "top5_accuracy_percent",
+        "top5_std_percent", "average_elapsed_minutes",
+    ]
+    chart_fields = list(dict.fromkeys(chart_fields + [
+        field for field in rows[0]
+        if field.startswith(("top", "zero_shot_top")) and
+        field.endswith(("_accuracy_percent", "_std_percent"))
+    ]))
+    chart_path = output_root / "selection_fraction_chart_data.csv"
+    with chart_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=chart_fields)
+        writer.writeheader()
+        writer.writerows({field: row[field] for field in chart_fields} for row in rows)
+
+    lines = [
+        "# TPT Entropy Selection Fraction Sweep", "",
+        "Accuracy values are means across the configured seeds; standard deviation is the "
+        "population standard deviation.", "",
+        "| Model | Dataset | Fraction | Selected views | Top-1 | Top-5 | Runtime (min) |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        selection_label = "Only origin" if row["only_origin"] else f"{row['selection_percent']:.0f}%"
+        lines.append(
+            f"| {row['model']} | {row['dataset']} | "
+            f"{selection_label} | "
+            f"{row['selected_views']}/{row['views']} | "
+            f"{row['top1_accuracy_percent']:.4f}% +/- {row['top1_std_percent']:.4f}% | "
+            f"{row['top5_accuracy_percent']:.4f}% +/- {row['top5_std_percent']:.4f}% | "
+            f"{row['average_elapsed_minutes']:.2f} |"
+        )
+    lines.append("")
+    (output_root / "selection_fraction_results.md").write_text(
+        "\n".join(lines), encoding="utf-8"
+    )
+    return chart_path
 
 
 def main():
@@ -675,7 +1022,19 @@ def main():
     logger.info("config: %s", config_path)
     logger.info("resolved arguments: %s", vars(args))
 
-    jobs = list(product(args.models, args.datasets, args.seeds))
+    sweep_jobs = [
+        (*job, False)
+        for job in product(args.models, args.datasets, args.selection_values, args.seeds)
+    ]
+    origin_jobs = []
+    if args.only_origin and args.augment:
+        origin_jobs = [
+            (model_name, dataset_name, 0.0, seed, True)
+            for model_name in args.models
+            for dataset_name in args.datasets
+            for seed in args.seeds
+        ]
+    jobs = sweep_jobs + origin_jobs
     worker_count = min(len(args.devices), len(jobs))
     devices = args.devices[:worker_count]
     assignments = [[] for _ in devices]
@@ -703,6 +1062,11 @@ def main():
     results: list[Result] = []
     model_order = {name: index for index, name in enumerate(args.models)}
     dataset_order = {name: index for index, name in enumerate(args.datasets)}
+    fraction_order = {
+        fraction: index for index, fraction in enumerate(args.selection_values)
+    }
+    if origin_jobs:
+        fraction_order[0.0] = -1
     seed_order = {seed: index for index, seed in enumerate(args.seeds)}
     spawn_context = multiprocessing.get_context("spawn")
     progress_lock = spawn_context.RLock()
@@ -719,23 +1083,34 @@ def main():
         ]
         futures = {}
         for executor, device_name, device_jobs in zip(executors, devices, assignments):
-            for model_name, dataset_name, seed in device_jobs:
+            for model_name, dataset_name, selection_fraction, seed, origin_only_job in device_jobs:
                 future = executor.submit(
                     evaluate_job, serialized_args, model_name, dataset_name, seed,
-                    device_name, devices.index(device_name), seed_log_paths[seed],
+                    selection_fraction, device_name, devices.index(device_name),
+                    seed_log_paths[seed], origin_only_job,
                 )
-                futures[future] = (model_name, dataset_name, seed, device_name)
+                futures[future] = (
+                    model_name, dataset_name, selection_fraction, seed, device_name,
+                    origin_only_job,
+                )
 
         for future in as_completed(futures):
             result = Result(**future.result())
             results.append(result)
             results.sort(key=lambda item: (
-                model_order[item.model], dataset_order[item.dataset], seed_order[item.seed]
+                model_order[item.model], dataset_order[item.dataset],
+                fraction_order[item.selection_fraction], seed_order[item.seed]
             ))
             seed_results = [item for item in results if item.seed == result.seed]
             write_results(seed_results, args.output_root / f"seed_{result.seed}")
+            mode_label = (
+                "Only origin" if result.only_origin else
+                f"count={result.selection_count}" if args.selection_count_mode else
+                f"fraction={result.selection_fraction:.2%}"
+            )
             print(
-                f"[RESULT] {result.device} seed={result.seed} {result.model} {result.dataset}: "
+                f"[RESULT] {result.device} {mode_label} "
+                f"seed={result.seed} {result.model} {result.dataset}: "
                 f"{result.correct_top1}/{result.samples} "
                 f"({100 * result.top1_accuracy:.4f}%)",
                 flush=True,
@@ -743,7 +1118,18 @@ def main():
 
     summary_root = args.output_root / "summary"
     write_results(results, summary_root)
-    write_average_results(results, summary_root, args.models, args.datasets)
+    averages = write_average_results(
+        results, summary_root, args.models, args.datasets, args.selection_values
+    )
+    chart_data_path = write_selection_fraction_results(averages, summary_root)
+    if args.plot["enabled"]:
+        from plot_tpt_selection_sweep import generate_plots
+
+        plot_paths = generate_plots(
+            args.plot["config"], data_path=chart_data_path,
+            output_dir=summary_root / "plots",
+        )
+        logger.info("generated plots: %s", ", ".join(map(str, plot_paths)))
     logger.info("wrote seed-specific results under %s and summary to %s",
                 args.output_root, summary_root)
     print(f"[INFO] wrote seed-specific TPT results under {args.output_root}")

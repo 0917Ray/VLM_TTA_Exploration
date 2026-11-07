@@ -1,0 +1,109 @@
+{
+  "enabled": true,
+  "data": {
+    "evaluation_config": "../evaluation/tpt_selection_fraction_sweep.yaml",
+    "source": "TPT selection-fraction sweep summary",
+    "model": "ViT-B/16",
+    "dataset": "imagenet-a",
+    "x_column": "selection_count",
+    "series": [
+      {
+        "column": "top1_accuracy_percent",
+        "error_column": "top1_std_percent",
+        "label": "Top-1",
+        "color": "#4F7C65",
+        "marker": "o"
+      },
+      {
+        "column": "top2_accuracy_percent",
+        "error_column": "top2_std_percent",
+        "label": "Top-2",
+        "color": "#587FA3",
+        "marker": "^"
+      },
+      {
+        "column": "top3_accuracy_percent",
+        "error_column": "top3_std_percent",
+        "label": "Top-3",
+        "color": "#B5823A",
+        "marker": "D"
+      },
+      {
+        "column": "top4_accuracy_percent",
+        "error_column": "top4_std_percent",
+        "label": "Top-4",
+        "color": "#7A6B9A",
+        "marker": "v"
+      },
+      {
+        "column": "top5_accuracy_percent",
+        "error_column": "top5_std_percent",
+        "label": "Top-5",
+        "color": "#A75B73",
+        "marker": "s"
+      }
+    ]
+  },
+  "figure": {
+    "figsize": [10, 5],
+    "dpi": 300,
+    "transparent": true,
+    "spine_width": 2.5
+  },
+  "axis": {
+    "xlabel": "Lowest-entropy views used for TTA (count)",
+    "ylabel": "Accuracy (%)",
+    "ylim": [40, 90],
+    "target_y_ticks": 6,
+    "grid": true
+  },
+  "errorbar": {
+    "enabled": false,
+    "meaning": "population standard deviation across seeds"
+  },
+  "zero_shot": {
+    "enabled": true,
+    "label": "CLIP zero-shot"
+  },
+  "legend": {
+    "enabled": true,
+    "loc": "upper center",
+    "bbox_to_anchor": [0.5, 0.99],
+    "frameon": false,
+    "ncol": 5,
+    "columnspacing": 1.4,
+    "handlelength": 1.8
+  },
+  "bar": {
+    "enabled": true,
+    "filename": "selection_fraction_bar.png",
+    "figsize": [16, 5],
+    "title": "TPT Accuracy by Entropy-Selected View Count",
+    "group_width": 0.74,
+    "face_alpha": 0.5,
+    "edge_alpha": 0.95,
+    "edge_width": 2.0,
+    "value_labels": true,
+    "value_format": "{:.1f}",
+    "value_fontsize": 8.5,
+    "value_rotation": 90
+  },
+  "line": {
+    "enabled": true,
+    "filename": "selection_fraction_line.png",
+    "figsize": [9, 5],
+    "y_min": 40,
+    "title": "TPT Accuracy vs. Entropy-Selected View Count",
+    "linewidth": 2.0,
+    "line_alpha": 0.92,
+    "marker_size": 5.5,
+    "marker_face_alpha": 0.6,
+    "marker_edge_alpha": 0.95,
+    "marker_edge_width": 1.35
+  },
+  "output": {
+    "pdf": true,
+    "bbox_inches": "tight",
+    "pad_inches": 0.04
+  }
+}
