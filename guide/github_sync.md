@@ -97,7 +97,7 @@ git push
 `.gitignore` 已忽略 `data/downloads/`、`data/raw/`、`models/` 和 `runs/`。已被 Git 跟踪的文件不会因新增 ignore 规则自动取消跟踪；需要从索引移除但保留本地文件时：
 
 ```bash
-git rm --cached README.md
+git rm --cached path/to/accidentally-tracked-output
 ```
 
 不要用 `git push --force` 覆盖共享历史。确需改写时，先确认影响范围并使用 `--force-with-lease`。

@@ -1,0 +1,60 @@
+{
+  "enabled": true,
+  "data": {
+    "evaluation_config": "../evaluation/tpt_lr_steps_ablation.yaml",
+    "model": "ViT-B/16",
+    "dataset": "imagenet-a",
+    "selection_count": 1,
+    "selection_fraction": null,
+    "weight_decay": null
+  },
+  "series": [
+    {
+      "name": "top1",
+      "column": "top1_accuracy_percent",
+      "std_column": "top1_std_percent",
+      "zero_shot_column": "zero_shot_top1_accuracy_percent",
+      "zero_shot_std_column": "zero_shot_top1_std_percent",
+      "label": "Top-1",
+      "color": "#4F7C65",
+      "marker": "o"
+    },
+    {
+      "name": "top5",
+      "column": "top5_accuracy_percent",
+      "std_column": "top5_std_percent",
+      "zero_shot_column": "zero_shot_top5_accuracy_percent",
+      "zero_shot_std_column": "zero_shot_top5_std_percent",
+      "label": "Top-5",
+      "color": "#A75B73",
+      "marker": "s"
+    }
+  ],
+  "figure": {
+    "figsize": [9, 5],
+    "bar_figsize": [11, 5],
+    "heatmap_figsize": [8, 5.5],
+    "dpi": 300,
+    "transparent": true,
+    "value_labels": true,
+    "value_format": "{:.1f}",
+    "value_fontsize": 8.5,
+    "errorbars": true,
+    "highlight_best": true,
+    "heatmap_best_marker_size": 90
+  },
+  "plots": {
+    "per_learning_rate": true,
+    "best_steps": true,
+    "best_accuracy": true,
+    "heatmaps": true
+  },
+  "axis": {
+    "accuracy_ylim": [0, 100],
+    "grid": true
+  },
+  "output": {
+    "pdf": true,
+    "directory": null
+  }
+}

@@ -1,20 +1,6 @@
 # TPT Quick Demo
 
-`configs/evaluation/tpt_quick_demo.yaml` 用较小的实验组合验证完整 TPT、多 GPU 调度、跨 seed 汇总和输出目录。它仍会处理完整 ImageNet-A，若只想检查代码是否可运行，请使用下面的 smoke test。
-
-## 当前配置
-
-| 项目 | 当前值 |
-| --- | --- |
-| 数据集 | ImageNet-A |
-| 模型 | ViT-B/16 |
-| seeds | `11, 42` |
-| GPU | `cuda:0, cuda:2` |
-| workers | 每个任务 `2` |
-| TPT | 64 views、最低熵 10%、1 step、Top-1 至 Top-5 |
-| 输出 | `runs/tpt_quick_demo/idea_init_test_num_work_2/` |
-
-两个 seed 是两个独立任务；当前两张 GPU 会各运行一个任务。
+`configs/evaluation/tpt_quick_demo.yaml` 用于验证完整 TPT、GPU 调度、跨 seed 汇总和输出目录。实验范围与运行参数以该配置文件为准；若只想检查代码是否可运行，请使用下面的 smoke test。
 
 ## 1. Smoke test
 
@@ -28,11 +14,9 @@ python scripts/evaluate_tpt.py \
   --output-root /tmp/tpt_quick_smoke --idea smoke
 ```
 
-注意：YAML 中的 `idea` 仍会追加到 CLI `--output-root`，所以上述结果位于 `/tmp/tpt_quick_smoke/idea_smoke/`。
+注意：CLI 中的 `--idea smoke` 会追加到 `--output-root`，所以上述结果位于 `/tmp/tpt_quick_smoke/idea_smoke/`。
 
-## 2. 运行当前 Demo
-
-确保 `cuda:0` 和 `cuda:2` 可用：
+## 2. 运行 Demo
 
 ```bash
 python scripts/evaluate_tpt.py \
@@ -47,7 +31,7 @@ python scripts/evaluate_tpt.py \
   --devices cuda:0
 ```
 
-这只改变调度方式，不改变两个 seed 任务；它们会在同一张 GPU 上依次运行。
+这只改变调度设备，不改变配置中定义的实验任务；任务会在同一张 GPU 上依次运行。
 
 ## 3. 逐步扩大实验
 
@@ -69,7 +53,7 @@ python scripts/evaluate_tpt.py \
   --models RN50 ViT-B/16 --idea two_models
 ```
 
-扩展到四个数据集和三个 seed 后，等价于标准完整实验组合：
+下面是临时扩展模型、数据集、seeds 和设备的 CLI 示例：
 
 ```bash
 python scripts/evaluate_tpt.py \
@@ -84,13 +68,12 @@ python scripts/evaluate_tpt.py \
 ## 输出
 
 ```text
-runs/tpt_quick_demo/idea_init_test_num_work_2/
+<run_root>/
   run_<timestamp>.log
-  seed_11/
+  seed_<seed>/
     results.csv
     results.json
     run_<timestamp>.log
-  seed_42/...
   summary/
     results.csv
     results.json
@@ -103,4 +86,4 @@ runs/tpt_quick_demo/idea_init_test_num_work_2/
     selection_fraction_chart_data.csv
 ```
 
-配置字段与标准 TPT 相同，详见[TPT 图像分类](tpt_classification.md#配置)。Quick Demo 默认不自动绘图；需要筛选扫描与图表时使用[TPT 筛选与绘图](tpt_selection_fraction_sweep.md)。
+配置字段与标准 TPT 相同，详见[TPT 图像分类](tpt_classification.md#配置)。是否自动绘图由 `plot.enabled` 控制；筛选消融与图表见[TPT Selection Fraction 消融](tpt_selection_fraction_ablation.md)。

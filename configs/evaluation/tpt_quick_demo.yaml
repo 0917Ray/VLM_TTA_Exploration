@@ -28,7 +28,7 @@ augment: true
 only_origin: false
 top_k: 5
 tta_steps: 1
-learning_rate: 0.005
+learning_rates: [0.005]
 prompt_init: "a photo of a"
 resolution: 224
 print_frequency: 100

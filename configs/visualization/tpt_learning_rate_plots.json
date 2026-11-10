@@ -1,0 +1,101 @@
+{
+  "enabled": true,
+  "data": {
+    "evaluation_config": "../evaluation/tpt_lr_ablation.yaml",
+    "source": "TPT one-step learning-rate ablation summary",
+    "model": "ViT-B/16",
+    "dataset": "imagenet-a",
+    "learning_rate": null,
+    "x_column": "learning_rate",
+    "series": [
+      {
+        "column": "top1_accuracy_percent",
+        "error_column": "top1_std_percent",
+        "label": "Top-1",
+        "color": "#4F7C65",
+        "marker": "o"
+      },
+      {
+        "column": "top5_accuracy_percent",
+        "error_column": "top5_std_percent",
+        "label": "Top-5",
+        "color": "#A75B73",
+        "marker": "s"
+      }
+    ]
+  },
+  "figure": {
+    "figsize": [9, 5],
+    "dpi": 300,
+    "transparent": true,
+    "spine_width": 2.5
+  },
+  "axis": {
+    "xlabel": "Learning rate",
+    "ylabel": "Accuracy (%)",
+    "ylim": [0, 100],
+    "target_y_ticks": 6,
+    "grid": true
+  },
+  "errorbar": {
+    "enabled": true,
+    "meaning": "population standard deviation across seeds"
+  },
+  "zero_shot": {
+    "enabled": true,
+    "label": "CLIP zero-shot"
+  },
+  "legend": {
+    "enabled": true,
+    "loc": "upper center",
+    "bbox_to_anchor": [0.5, 0.99],
+    "frameon": false,
+    "ncol": 2,
+    "columnspacing": 1.4,
+    "handlelength": 1.8
+  },
+  "bar": {
+    "enabled": true,
+    "filename": "learning_rate_bar.png",
+    "figsize": [12, 5],
+    "title": "One-step TPT Accuracy by Learning Rate",
+    "group_width": 0.7,
+    "face_alpha": 0.5,
+    "edge_alpha": 0.95,
+    "edge_width": 2.0,
+    "value_labels": true,
+    "value_format": "{:.1f}",
+    "value_fontsize": 8.5,
+    "value_rotation": 90
+  },
+  "line": {
+    "enabled": true,
+    "filename": "learning_rate_line.png",
+    "figsize": [9, 5],
+    "y_min": 30,
+    "title": "One-step TPT Accuracy vs. Learning Rate",
+    "linewidth": 2.0,
+    "line_alpha": 0.92,
+    "marker_size": 5.5,
+    "marker_face_alpha": 0.6,
+    "marker_edge_alpha": 0.95,
+    "marker_edge_width": 1.35,
+    "value_labels": true,
+    "value_format": "{:.1f}",
+    "value_fontsize": 8.5,
+    "value_offset_points": 7.0,
+    "highlight_best": {
+      "enabled": true,
+      "columns": ["top1_accuracy_percent", "top5_accuracy_percent"],
+      "marker": "*",
+      "marker_size": 15.0,
+      "edge_color": "#1F2328",
+      "edge_width": 1.2
+    }
+  },
+  "output": {
+    "pdf": true,
+    "bbox_inches": "tight",
+    "pad_inches": 0.04
+  }
+}

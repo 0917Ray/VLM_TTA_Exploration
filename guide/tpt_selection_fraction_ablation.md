@@ -1,10 +1,10 @@
-# TPT 筛选扫描与绘图
+# TPT Selection Fraction 消融与绘图
 
 该流程比较同一张测试图像的低熵视图筛选策略。它筛选的是该图像的增强视图，不是从数据集中筛选图片。
 
 ## 三类横轴结果
 
-默认图从左到右包含：
+启用相应数据后，图中可包含：
 
 1. `CLIP zero-shot`：原图标准中心裁剪，读取首次 TPT 更新前的 logits，不进行适配。
 2. `Only origin`：只用原图标准中心裁剪执行 TPT，不生成随机增强。
@@ -12,50 +12,30 @@
 
 因此 `count=1` 不等于 `Only origin`：熵最低的视图可能是随机增强视图。
 
-## 1. 当前配置
+## 1. 配置与准备
 
-`configs/evaluation/tpt_selection_fraction_sweep.yaml` 当前运行：
-
-- ImageNet-A、ViT-B/16、seed 42、64 views。
-- count 模式，扫描最低熵的 1 至 10 个视图。
-- `only_origin: true`，额外加入 Only origin TPT。
-- `top_k: 10`，记录 Top-1 至 Top-10。
-- 完成后自动生成柱状图和折线图。
-- 绘图 JSON 当前选择 Top-1 至 Top-5；记录与绘制范围彼此独立。
-
-运行前先完成[准备工作](preparation.md)。
+配置文件：`configs/evaluation/tpt_selection_fraction_ablation.yaml`。实验范围、筛选模式、超参数、设备、输出位置和绘图选项均以该文件为准。运行前先完成[准备工作](preparation.md)。
 
 ## 2. Smoke test
 
 ```bash
 python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_selection_fraction_sweep.yaml \
+  --config configs/evaluation/tpt_selection_fraction_ablation.yaml \
   --selection-counts 1 2 \
   --devices cuda:0 --num-workers 0 --limit 2 \
   --output-root /tmp/tpt_selection_smoke --idea smoke
 ```
 
-YAML 的 `only_origin: true` 仍然生效，因此该命令运行 `count=1`、`count=2` 和 `Only origin` 三个任务。结果位于 `/tmp/tpt_selection_smoke/idea_smoke/`。
+该命令将 count 候选临时覆盖为 `1` 和 `2`；是否额外运行 Only origin 仍由 YAML 的 `only_origin` 决定。结果位于 `/tmp/tpt_selection_smoke/idea_smoke/`。
 
 ## 3. 正式运行
 
 ```bash
 python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_selection_fraction_sweep.yaml
+  --config configs/evaluation/tpt_selection_fraction_ablation.yaml
 ```
 
-当前输出目录由以下 YAML 字段决定：
-
-```yaml
-output_root: runs/tpt_selection_fraction_sweep
-idea: count_sweep_zero_shot
-```
-
-因此结果写入：
-
-```text
-runs/tpt_selection_fraction_sweep/idea_count_sweep_zero_shot/
-```
+输出目录由 YAML 的 `output_root` 和 `idea` 决定：`idea` 非空时写入 `<output_root>/idea_<idea>/`，否则直接写入 `<output_root>/`。
 
 ## fraction 与 count 模式
 
@@ -63,41 +43,27 @@ runs/tpt_selection_fraction_sweep/idea_count_sweep_zero_shot/
 
 ### Count 模式
 
-```yaml
-selection_fractions: false
-fraction_options: [0.02, 0.04, 0.06, 0.08, 0.1]
-selection_counts: true
-count_options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-```
-
-启用后只读取 `count_options`。每个 count 必须唯一且位于 `[1, views]`。命令行可临时覆盖：
+设置 `selection_counts: true` 和 `selection_fractions: false` 后，只读取 `count_options`。每个 count 必须唯一且位于 `[1, views]`。命令行可临时覆盖：
 
 ```bash
 python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_selection_fraction_sweep.yaml \
+  --config configs/evaluation/tpt_selection_fraction_ablation.yaml \
   --selection-counts 1 2 3 4 5
 ```
 
 ### Fraction 模式
 
-```yaml
-selection_fractions: true
-fraction_options: [0.02, 0.04, 0.06, 0.08, 0.1]
-selection_counts: false
-count_options: [1, 2, 3, 4, 5]
-```
-
-启用后只读取 `fraction_options`。每个 fraction 必须唯一且位于 `(0, 1]`，实际选择数量为：
+设置 `selection_fractions: true` 和 `selection_counts: false` 后，只读取 `fraction_options`。每个 fraction 必须唯一且位于 `(0, 1]`，实际选择数量为：
 
 ```text
 max(1, int(views × fraction))
 ```
 
-所以 64 views、fraction `0.04` 实际选择 2 个视图。CLI 覆盖示例：
+例如 64 views、fraction `0.04` 实际选择 2 个视图。CLI 覆盖示例：
 
 ```bash
 python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_selection_fraction_sweep.yaml \
+  --config configs/evaluation/tpt_selection_fraction_ablation.yaml \
   --selection-fractions 0.02 0.04 0.06 0.08 0.1
 ```
 
@@ -121,7 +87,7 @@ only_origin: true
 - 逐任务：`topk_correct`、`topk_accuracy`、`zero_shot_topk_correct`、`zero_shot_topk_accuracy`。
 - 汇总 CSV：`topN_accuracy_percent`、`topN_std_percent` 及对应 `zero_shot_` 字段。
 
-兼容字段 Top-1 和 Top-5 始终保留。当前 sweep 设置 `top_k: 10`，但绘图配置的 `data.series` 默认只列出 Top-1 至 Top-5。要只绘制 Top-1、Top-3、Top-5，改为：
+兼容字段 Top-1 和 Top-5 始终保留。记录范围由 `top_k` 决定，绘制范围由绘图配置的 `data.series` 独立决定。要只绘制 Top-1、Top-3、Top-5，可设置为：
 
 ```json
 "series": [
@@ -149,12 +115,15 @@ plot:
 | --- | --- |
 | `data.evaluation_config` | 用评测 YAML 自动推导数据和输出路径。 |
 | `data.model`, `data.dataset` | 从汇总 CSV 选择一组结果。 |
+| `data.learning_rate` | 视图筛选图所用的学习率；LR 消融图设为 `null`。 |
 | `data.x_column` | count 模式用 `selection_count`；fraction 模式用 `selection_percent`。 |
 | `data.series` | 选择要绘制的 Top-N、颜色和 marker。 |
 | `zero_shot.enabled`, `label` | 显示和命名独立 zero-shot 横轴类别。 |
 | `bar.enabled`, `line.enabled` | 启用柱状图或折线图。 |
-| `bar.value_format` | 柱顶数值格式；当前 `{:.1f}` 保留一位小数。 |
-| `legend.ncol` | 图例列数；当前五个 Top-N 单行显示。 |
+| `bar.value_format` | 柱顶数值格式，例如 `{:.1f}` 表示保留一位小数。 |
+| `line.value_labels` | 是否在折线点旁标注数值。 |
+| `line.highlight_best` | 是否用 marker 标出指定指标最优点。 |
+| `legend.ncol` | 图例列数。 |
 | `axis.ylim` | 统一 y 轴范围。 |
 
 切换到 fraction 模式时，同时修改绘图 JSON：
@@ -170,22 +139,24 @@ plot:
 完成评测后，只需运行：
 
 ```bash
-python scripts/plot_tpt_selection_sweep.py \
+python scripts/plot_tpt_selection_ablation.py \
   --config configs/visualization/tpt_selection_fraction_plots.json
 ```
 
-绘图脚本读取 `data.evaluation_config` 指向的评测 YAML，并根据其中的 `output_root` 和 `idea` 自动推导：
+绘图脚本读取 `data.evaluation_config` 指向的评测 YAML，并根据其中的 `output_root` 和 `idea` 自动推导。`idea` 非空时路径为：
 
 ```text
 输入：<output_root>/idea_<idea>/summary/selection_fraction_chart_data.csv
 输出：<output_root>/idea_<idea>/summary/plots/
 ```
 
+`idea` 为空时省略 `idea_<idea>/` 这一层。
+
 如果评测时用 CLI 临时覆盖了 `--output-root` 或 `--idea`，YAML 不会自动更新。此时显式指定：
 
 ```bash
 RUN_DIR=/path/to/your/run
-python scripts/plot_tpt_selection_sweep.py \
+python scripts/plot_tpt_selection_ablation.py \
   --config configs/visualization/tpt_selection_fraction_plots.json \
   --data "$RUN_DIR/summary/selection_fraction_chart_data.csv" \
   --output-dir "$RUN_DIR/summary/plots"
@@ -195,7 +166,7 @@ python scripts/plot_tpt_selection_sweep.py \
 
 ```bash
 cd /path/to/your/run/summary/plots
-python plot_tpt_selection_sweep.py --config selection_fraction_plots_config.json
+python plot_tpt_selection_ablation.py --config selection_fraction_plots_config.json
 ```
 
 旧 CSV 如果没有 `zero_shot_topN_*` 字段，仍能绘图，但不会出现 `CLIP zero-shot` 类别。
@@ -222,7 +193,9 @@ python plot_tpt_selection_sweep.py --config selection_fraction_plots_config.json
       selection_fraction_line.pdf
       selection_fraction_plot_data.csv
       selection_fraction_plots_config.json
-      plot_tpt_selection_sweep.py
+      plot_tpt_selection_ablation.py
 ```
 
-图表使用汇总均值；开启 `errorbar.enabled` 后，误差条使用配置中声明的跨 seed population standard deviation。
+图表使用汇总均值；开启 `errorbar.enabled` 后，误差条使用配置中声明的跨 seed population standard deviation。只有一个 seed 时该值为 `0`。
+
+若同时扫描多个 `learning_rates` 和多个 count/fraction，每个组合都会运行。此时视图筛选绘图配置必须用 `data.learning_rate` 选定一个学习率，否则同一横轴位置会有重复记录。单独分析学习率时使用[TPT Learning-rate 消融](tpt_lr_ablation.md)。

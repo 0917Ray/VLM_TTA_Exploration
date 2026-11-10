@@ -1,8 +1,8 @@
 {
   "enabled": true,
   "data": {
-    "evaluation_config": "../evaluation/tpt_selection_fraction_sweep.yaml",
-    "source": "TPT selection-fraction sweep summary",
+    "evaluation_config": "../evaluation/tpt_selection_fraction_ablation.yaml",
+    "source": "TPT selection-fraction ablation summary",
     "model": "ViT-B/16",
     "dataset": "imagenet-a",
     "x_column": "selection_count",

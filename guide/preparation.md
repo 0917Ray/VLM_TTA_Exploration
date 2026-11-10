@@ -40,9 +40,11 @@ print("GPU count:", torch.cuda.device_count())
 print("NumPy:", numpy.__version__)
 print("Matplotlib:", matplotlib.__version__)
 PY
+
+clip-evaluate --help
 ```
 
-GPU 复现需要 `CUDA available: True`。已有环境只缺绘图依赖时可运行 `python -m pip install -e '.[visualization]'`。
+GPU 复现需要 `CUDA available: True`。`clip-evaluate --help` 应显示 zero-shot 评测参数；该命令与 `python scripts/evaluate_clip_zeroshot.py` 使用同一个实现。已有环境只缺绘图依赖时可运行 `python -m pip install -e '.[visualization]'`。
 
 ## 2. 数据集准备
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot TPT accuracy across entropy-selection fraction or count settings."""
+"""Plot TPT ablation accuracy from chart-ready evaluation results."""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "source": None,
         "model": None,
         "dataset": None,
+        "learning_rate": None,
         "x_column": "selection_percent",
         "series": [
             {
@@ -153,6 +154,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "marker_face_alpha": 0.6,
         "marker_edge_alpha": 0.95,
         "marker_edge_width": 1.35,
+        "value_labels": True,
+        "value_format": "{:.1f}",
+        "value_fontsize": 8.5,
+        "value_offset_points": 7.0,
+        "highlight_best": {
+            "enabled": False,
+            "columns": ["top1_accuracy_percent"],
+            "marker": "*",
+            "marker_size": 15.0,
+            "edge_color": "#1F2328",
+            "edge_width": 1.2,
+        },
     },
     "output": {"directory": None, "pdf": True, "bbox_inches": "tight", "pad_inches": 0.04},
 }
@@ -232,6 +245,31 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ValueError(f"{chart_name}.enabled must be true or false")
         if Path(config[chart_name]["filename"]).suffix.lower() != ".png":
             raise ValueError(f"{chart_name}.filename must end in .png")
+    if not isinstance(config["line"]["value_labels"], bool):
+        raise ValueError("line.value_labels must be true or false")
+    try:
+        config["line"]["value_format"].format(0.0)
+    except (AttributeError, KeyError, ValueError) as error:
+        raise ValueError("line.value_format must be a valid numeric format string") from error
+    if float(config["line"]["value_fontsize"]) <= 0:
+        raise ValueError("line.value_fontsize must be positive")
+    if not math.isfinite(float(config["line"]["value_offset_points"])):
+        raise ValueError("line.value_offset_points must be finite")
+    highlight = config["line"]["highlight_best"]
+    if not isinstance(highlight, dict) or not isinstance(highlight.get("enabled"), bool):
+        raise ValueError("line.highlight_best.enabled must be true or false")
+    if highlight["enabled"]:
+        columns = highlight.get("columns")
+        if (not isinstance(columns, list) or not columns or
+                any(not isinstance(column, str) or not column for column in columns)):
+            raise ValueError(
+                "line.highlight_best.columns must be a non-empty list of strings"
+            )
+        if len(set(columns)) != len(columns):
+            raise ValueError("line.highlight_best.columns must not contain duplicates")
+        if float(highlight["marker_size"]) <= 0 or float(highlight["edge_width"]) < 0:
+            raise ValueError("line.highlight_best marker size/edge width is invalid")
+        mcolors.to_rgba(highlight["edge_color"])
     if not isinstance(config["zero_shot"]["enabled"], bool):
         raise ValueError("zero_shot.enabled must be true or false")
     if not isinstance(config["zero_shot"]["label"], str) or not config["zero_shot"]["label"].strip():
@@ -262,10 +300,21 @@ def read_chart_data(path: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
         rows = list(csv.DictReader(stream))
     model = config["data"]["model"]
     dataset = config["data"]["dataset"]
+    learning_rate = config["data"]["learning_rate"]
     if model is not None:
         rows = [row for row in rows if row.get("model") == model]
     if dataset is not None:
         rows = [row for row in rows if row.get("dataset") == dataset]
+    if learning_rate is not None:
+        try:
+            target_rate = float(learning_rate)
+            rows = [
+                row for row in rows
+                if math.isclose(float(row.get("learning_rate", "nan")), target_rate,
+                                rel_tol=1e-12, abs_tol=0.0)
+            ]
+        except (TypeError, ValueError) as error:
+            raise ValueError("data.learning_rate must be numeric or null") from error
     if not rows:
         raise ValueError(f"No chart rows remain after filtering {path}")
 
@@ -319,7 +368,8 @@ def read_chart_data(path: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
     x_values = [row[x_column] for row in rows]
     if len(set(x_values)) != len(x_values):
         raise ValueError(
-            "Duplicate x values remain after filtering; set data.model and data.dataset"
+            "Duplicate x values remain after filtering; set data.model, data.dataset, "
+            "and data.learning_rate as needed"
         )
     if config["zero_shot"]["enabled"] and all(zero_shot_present):
         zero_shot_row = dict(rows[0])
@@ -468,6 +518,9 @@ def plot_line(rows: list[dict[str, Any]], output_dir: Path,
     x_column = config["data"]["x_column"]
     positions = np.arange(len(rows), dtype=float)
     figure, axis = plt.subplots(figsize=config["line"]["figsize"])
+    series_by_column = {
+        series["column"]: series for series in config["data"]["series"]
+    }
     for series in config["data"]["series"]:
         values = np.array([row[series["column"]] for row in rows])
         error_values = None
@@ -491,6 +544,44 @@ def plot_line(rows: list[dict[str, Any]], output_dir: Path,
             elinewidth=config["errorbar"]["linewidth"],
             capsize=config["errorbar"]["capsize"], zorder=3,
         )
+        if config["line"]["value_labels"]:
+            configured_ylim = config["axis"]["ylim"]
+            for position, value in zip(positions, values):
+                offset = float(config["line"]["value_offset_points"])
+                vertical_alignment = "bottom"
+                if configured_ylim is not None:
+                    lower, upper = map(float, configured_ylim)
+                    if value >= upper - 0.08 * (upper - lower):
+                        offset = -abs(offset)
+                        vertical_alignment = "top"
+                axis.annotate(
+                    config["line"]["value_format"].format(value),
+                    xy=(position, value), xytext=(0, offset),
+                    textcoords="offset points", ha="center", va=vertical_alignment,
+                    fontsize=config["line"]["value_fontsize"],
+                    color=series["color"], zorder=5,
+                )
+    highlight = config["line"]["highlight_best"]
+    if highlight["enabled"]:
+        missing_columns = set(highlight["columns"]) - set(series_by_column)
+        if missing_columns:
+            raise ValueError(
+                "Every line.highlight_best.columns entry must match a configured "
+                f"data.series column; missing: {', '.join(sorted(missing_columns))}"
+            )
+        for column in highlight["columns"]:
+            values = np.array([row[column] for row in rows], dtype=float)
+            best_value = float(np.max(values))
+            best_positions = positions[
+                np.isclose(values, best_value, rtol=1e-12, atol=1e-12)
+            ]
+            series = series_by_column[column]
+            axis.scatter(
+                best_positions, np.full(len(best_positions), best_value),
+                marker=highlight["marker"], s=float(highlight["marker_size"]) ** 2,
+                facecolor=series["color"], edgecolor=highlight["edge_color"],
+                linewidth=float(highlight["edge_width"]), zorder=6, clip_on=False,
+            )
     axis.set_title(chart_title(config["line"]["title"], rows))
     style_axis(axis, config, rows)
     if config["line"]["y_min"] is not None:

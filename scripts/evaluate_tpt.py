@@ -38,7 +38,8 @@ CONFIG_KEYS = {
     "datasets", "models", "devices", "device", "seeds", "seed", "num_workers", "views",
     "selection_fraction", "selection_fractions", "selection_counts", "fraction_options",
     "count_options", "only_origin", "augment",
-    "top_k", "tta_steps", "learning_rate",
+    "top_k", "tta_steps", "tta_step_options", "learning_rate", "learning_rates",
+    "weight_decay",
     "prompt_init", "resolution", "print_frequency", "limit", "log_file", "plot",
 }
 DEFAULTS = {
@@ -63,13 +64,16 @@ DEFAULTS = {
     "augment": True,
     "top_k": 5,
     "tta_steps": 1,
+    "tta_step_options": None,
     "learning_rate": 5e-3,
+    "learning_rates": None,
+    "weight_decay": 1e-2,
     "prompt_init": "a photo of a",
     "resolution": 224,
     "print_frequency": 100,
     "limit": None,
     "log_file": "run.log",
-    "plot": {"enabled": False, "config": None},
+    "plot": {"enabled": False, "kind": "ablation", "config": None},
 }
 
 
@@ -103,6 +107,7 @@ class Result:
     selected_views: int
     tta_steps: int
     learning_rate: float
+    weight_decay: float
     seed: int
     device: str
     elapsed_minutes: float
@@ -345,8 +350,13 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
     selection_group.add_argument("--selection-fraction", type=float)
     selection_group.add_argument("--selection-fractions", type=float, nargs="+")
     selection_group.add_argument("--selection-counts", type=int, nargs="+")
-    parser.add_argument("--tta-steps", type=int)
-    parser.add_argument("--learning-rate", type=float)
+    tta_step_group = parser.add_mutually_exclusive_group()
+    tta_step_group.add_argument("--tta-steps", type=int)
+    tta_step_group.add_argument("--tta-step-options", type=int, nargs="+")
+    learning_rate_group = parser.add_mutually_exclusive_group()
+    learning_rate_group.add_argument("--learning-rate", type=float)
+    learning_rate_group.add_argument("--learning-rates", type=float, nargs="+")
+    parser.add_argument("--weight-decay", type=float)
     parser.add_argument("--prompt-init")
     parser.add_argument("--resolution", type=int)
     parser.add_argument("--print-frequency", type=int)
@@ -355,6 +365,10 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
 
     config_path = resolve_path(cli.config)
     config = load_config(config_path)
+    if "learning_rate" in config and "learning_rates" in config:
+        raise SystemExit("Config cannot contain both learning_rate and learning_rates")
+    if "tta_steps" in config and "tta_step_options" in config:
+        raise SystemExit("Config cannot contain both tta_steps and tta_step_options")
     if isinstance(config.get("selection_fractions"), list):
         if "fraction_options" in config:
             raise SystemExit("Use either legacy selection_fractions list or fraction_options")
@@ -378,6 +392,7 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
     for key in CONFIG_KEYS - {
         "log_file", "device", "seed", "selection_counts", "selection_fractions",
         "fraction_options", "count_options", "only_origin", "augment", "top_k",
+        "tta_steps", "tta_step_options", "learning_rate", "learning_rates",
     }:
         value = getattr(cli, key, None)
         if value is not None:
@@ -404,6 +419,16 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
     if cli.augment is not None:
         values["augment"] = cli.augment
         values["only_origin"] = not cli.augment
+    if cli.learning_rate is not None:
+        values["learning_rate"] = cli.learning_rate
+        values["learning_rates"] = [cli.learning_rate]
+    elif cli.learning_rates is not None:
+        values["learning_rates"] = cli.learning_rates
+    if cli.tta_steps is not None:
+        values["tta_steps"] = cli.tta_steps
+        values["tta_step_options"] = [cli.tta_steps]
+    elif cli.tta_step_options is not None:
+        values["tta_step_options"] = cli.tta_step_options
     for key in ("data_root", "class_index", "class_names", "model_root", "output_root"):
         values[key] = resolve_path(values[key])
 
@@ -464,8 +489,8 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
             if not values["augment"]:
                 raise SystemExit(
                     "augment=false leaves one view per image, so count_options can only be [1]. "
-                    "Set augment=true to sweep counts from 1 to 10; use only_origin=true "
-                    "to add an origin-only baseline alongside that sweep."
+                    "Set augment=true to scan counts from 1 to 10; use only_origin=true "
+                    "to add an origin-only baseline alongside that ablation."
                 )
             raise SystemExit(f"count_options must be unique and between 1 and {max_count}")
         selection_fractions = [count / max_count for count in selection_counts]
@@ -488,8 +513,39 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
         raise SystemExit("views * every selection fraction must select at least one view")
     values["selection_values"] = selection_fractions
     values["selection_fraction"] = selection_fractions[0]
-    if values["tta_steps"] < 1 or values["learning_rate"] <= 0:
-        raise SystemExit("tta_steps and learning_rate must be positive")
+    tta_steps = values["tta_step_options"]
+    if tta_steps is None:
+        tta_steps = [values["tta_steps"]]
+    if (not isinstance(tta_steps, list) or not tta_steps or
+            any(not isinstance(steps, int) or isinstance(steps, bool)
+                for steps in tta_steps)):
+        raise SystemExit("tta_step_options must be a non-empty list of integers")
+    if len(set(tta_steps)) != len(tta_steps):
+        raise SystemExit("tta_step_options must not contain duplicates")
+    if any(steps < 1 for steps in tta_steps):
+        raise SystemExit("every TTA step count must be positive")
+    values["tta_step_values"] = tta_steps
+    values["tta_steps"] = tta_steps[0]
+    learning_rates = values["learning_rates"]
+    if learning_rates is None:
+        learning_rates = [values["learning_rate"]]
+    if (not isinstance(learning_rates, list) or not learning_rates or
+            any(isinstance(rate, bool) or not isinstance(rate, (int, float))
+                for rate in learning_rates)):
+        raise SystemExit("learning_rates must be a non-empty list of numbers")
+    learning_rates = [float(rate) for rate in learning_rates]
+    if len(set(learning_rates)) != len(learning_rates):
+        raise SystemExit("learning_rates must not contain duplicates")
+    if any(not math.isfinite(rate) or rate <= 0 for rate in learning_rates):
+        raise SystemExit("every learning rate must be finite and positive")
+    values["learning_rate_values"] = learning_rates
+    values["learning_rate"] = learning_rates[0]
+    if (isinstance(values["weight_decay"], bool) or
+            not isinstance(values["weight_decay"], (int, float)) or
+            not math.isfinite(float(values["weight_decay"])) or
+            values["weight_decay"] < 0):
+        raise SystemExit("weight_decay must be finite and non-negative")
+    values["weight_decay"] = float(values["weight_decay"])
     if values["resolution"] < 1 or values["print_frequency"] < 1:
         raise SystemExit("resolution and print_frequency must be positive")
     if not isinstance(values["prompt_init"], str) or not values["prompt_init"].strip():
@@ -497,11 +553,13 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
     if values["limit"] is not None and values["limit"] < 1:
         raise SystemExit("limit must be positive")
     plot = values["plot"]
-    if not isinstance(plot, dict) or set(plot) - {"enabled", "config"}:
-        raise SystemExit("plot must contain only enabled and config")
+    if not isinstance(plot, dict) or set(plot) - {"enabled", "kind", "config"}:
+        raise SystemExit("plot must contain only enabled, kind, and config")
     plot = {**DEFAULTS["plot"], **plot}
     if not isinstance(plot["enabled"], bool):
         raise SystemExit("plot.enabled must be true or false")
+    if plot["kind"] not in {"ablation", "lr_steps"}:
+        raise SystemExit("plot.kind must be ablation or lr_steps")
     if plot["config"] is not None:
         if not isinstance(plot["config"], (str, Path)):
             raise SystemExit("plot.config must be a path or null")
@@ -607,8 +665,9 @@ def accumulate_topk_correct(logits: torch.Tensor, labels: torch.Tensor,
 
 
 def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed: int,
-                 selection_fraction: float, device_name: str, progress_position: int,
-                 log_path: str, origin_only_job: bool = False) -> dict:
+                 selection_fraction: float, learning_rate: float, tta_steps: int,
+                 device_name: str, progress_position: int, log_path: str,
+                 origin_only_job: bool = False) -> dict:
     logger = setup_worker_logging(log_path)
     args = argparse.Namespace(**serialized_args)
     device = torch.device(device_name)
@@ -624,8 +683,8 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
         f"fraction={selection_fraction:.2%}"
     )
     logger.info(
-        "starting %s / %s / seed=%d / %s on %s",
-        model_name, dataset_name, seed, mode_label, device,
+        "starting %s / %s / seed=%d / %s / lr=%g / steps=%d on %s",
+        model_name, dataset_name, seed, mode_label, learning_rate, tta_steps, device,
     )
 
     import clip
@@ -653,7 +712,7 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
             f"{model_name} expects resolution {model_resolution}, got {args.resolution}"
         )
     optimizer = torch.optim.AdamW(
-        [model.prompt_learner.ctx], lr=args.learning_rate
+        [model.prompt_learner.ctx], lr=learning_rate, weight_decay=args.weight_decay
     )
     scaler = torch.amp.GradScaler(device.type, init_scale=1000, enabled=device.type == "cuda")
 
@@ -678,7 +737,8 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
 
     progress = tqdm(
         loader,
-        desc=(f"{device} / {mode_label} / seed={seed} / "
+        desc=(f"{device} / {mode_label} / lr={learning_rate:g} / steps={tta_steps} / "
+              f"seed={seed} / "
               f"{model_name} / {dataset_name}"),
         unit="image",
         position=progress_position,
@@ -692,7 +752,7 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
         optimizer.state.clear()
         tune_fraction = 1.0 if origin_only_job else selection_fraction
         zero_shot_logits = tune_prompt(
-            model, views, optimizer, scaler, tune_fraction, args.tta_steps, device
+            model, views, optimizer, scaler, tune_fraction, tta_steps, device
         )
         with torch.no_grad(), torch.autocast(
                 device_type=device.type, dtype=torch.float16, enabled=device.type == "cuda"):
@@ -737,17 +797,18 @@ def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed
         augment=not origin_only_job,
         only_origin=origin_only_job,
         selected_views=1 if origin_only_job else selected_view_count,
-        tta_steps=args.tta_steps,
-        learning_rate=args.learning_rate,
+        tta_steps=tta_steps,
+        learning_rate=learning_rate,
+        weight_decay=args.weight_decay,
         seed=seed,
         device=str(device),
         elapsed_minutes=elapsed / 60,
     )
     logger.info(
-        "completed %s / %s / seed=%d / %s: "
+        "completed %s / %s / seed=%d / %s / lr=%g / steps=%d: "
         "top1=%.4f%% top5=%.4f%% in %.2f min",
         model_name, dataset_name, seed,
-        "Only origin" if result.only_origin else mode_label,
+        "Only origin" if result.only_origin else mode_label, learning_rate, tta_steps,
         100 * result.top1_accuracy, 100 * result.top5_accuracy, result.elapsed_minutes,
     )
     return asdict(result)
@@ -764,7 +825,9 @@ def write_results(results: list[Result], output_root: Path):
 
 
 def write_average_results(results: list[Result], output_root: Path, models: list[str],
-                          datasets: list[str], selection_fractions: list[float]) -> list[dict]:
+                          datasets: list[str], selection_fractions: list[float],
+                          learning_rates: list[float],
+                          tta_steps: list[int]) -> list[dict]:
     output_root.mkdir(parents=True, exist_ok=True)
     averages = []
 
@@ -779,6 +842,9 @@ def write_average_results(results: list[Result], output_root: Path, models: list
             "only_origin": group[0].only_origin,
             "selected_views": group[0].selected_views,
             "views": group[0].views,
+            "tta_steps": group[0].tta_steps,
+            "learning_rate": group[0].learning_rate,
+            "weight_decay": group[0].weight_decay,
             "num_seeds": len(group),
             "seeds": [result.seed for result in group],
             "samples_per_seed": group[0].samples,
@@ -828,27 +894,37 @@ def write_average_results(results: list[Result], output_root: Path, models: list
     for model_name in models:
         for dataset_name in datasets:
             for selection_fraction in selection_fractions:
-                group = [
-                    result for result in results
-                    if (not result.only_origin and result.model == model_name and
-                        result.dataset == dataset_name and
-                        result.selection_fraction == selection_fraction)
-                ]
-                if not group:
-                    raise ValueError(
-                        f"Missing results for {model_name}, {dataset_name}, "
-                        f"selection_fraction={selection_fraction}"
-                    )
-                averages.append(summarize(group, selection_fraction))
+                for learning_rate in learning_rates:
+                    for steps in tta_steps:
+                        group = [
+                            result for result in results
+                            if (not result.only_origin and result.model == model_name and
+                                result.dataset == dataset_name and
+                                result.selection_fraction == selection_fraction and
+                                result.learning_rate == learning_rate and
+                                result.tta_steps == steps)
+                        ]
+                        if not group:
+                            raise ValueError(
+                                f"Missing results for {model_name}, {dataset_name}, "
+                                f"selection_fraction={selection_fraction}, "
+                                f"learning_rate={learning_rate}, tta_steps={steps}"
+                            )
+                        averages.append(summarize(group, selection_fraction))
     if any(result.only_origin for result in results):
         for model_name in models:
             for dataset_name in datasets:
-                group = [
-                    result for result in results
-                    if result.only_origin and result.model == model_name and result.dataset == dataset_name
-                ]
-                if group:
-                    averages.append(summarize(group, 0.0))
+                for learning_rate in learning_rates:
+                    for steps in tta_steps:
+                        group = [
+                            result for result in results
+                            if (result.only_origin and result.model == model_name and
+                                result.dataset == dataset_name and
+                                result.learning_rate == learning_rate and
+                                result.tta_steps == steps)
+                        ]
+                        if group:
+                            averages.append(summarize(group, 0.0))
     with (output_root / "average_results.json").open("w", encoding="utf-8") as stream:
         json.dump(averages, stream, indent=2, ensure_ascii=False)
     csv_rows = [{**row, "seeds": " ".join(map(str, row["seeds"]))} for row in averages]
@@ -858,7 +934,8 @@ def write_average_results(results: list[Result], output_root: Path, models: list
         writer.writerows(csv_rows)
 
     by_key = {
-        (row["model"], row["dataset"], row["selection_fraction"]): row
+        (row["model"], row["dataset"], row["selection_fraction"],
+         row["learning_rate"], row["tta_steps"]): row
         for row in averages
     }
     lines = ["# TPT Average Top-1 Accuracy", ""]
@@ -866,38 +943,45 @@ def write_average_results(results: list[Result], output_root: Path, models: list
         lines.extend([f"Idea: `{results[0].idea}`", ""])
     lines.extend([
         "Values are mean +/- population standard deviation across seeds.", "",
-        "| Model | Selection fraction | " + " | ".join(datasets) + " |",
-        "| --- | ---: | " + " | ".join("---:" for _ in datasets) + " |",
+        "| Model | Selection fraction | Learning rate | Steps | " + " | ".join(datasets) + " |",
+        "| --- | ---: | ---: | ---: | " + " | ".join("---:" for _ in datasets) + " |",
     ])
     for model_name in models:
         for selection_fraction in selection_fractions:
-            cells = []
-            for dataset_name in datasets:
-                row = by_key[(model_name, dataset_name, selection_fraction)]
-                cells.append(
-                    f"{100 * row['average_top1_accuracy']:.4f}% +/- "
-                    f"{100 * row['std_top1_accuracy']:.4f}%"
-                )
-            lines.append(
-                f"| {model_name} | {100 * selection_fraction:.0f}% | "
-                + " | ".join(cells) + " |"
-            )
+            for learning_rate in learning_rates:
+                for steps in tta_steps:
+                    cells = []
+                    for dataset_name in datasets:
+                        row = by_key[(
+                            model_name, dataset_name, selection_fraction,
+                            learning_rate, steps,
+                        )]
+                        cells.append(
+                            f"{100 * row['average_top1_accuracy']:.4f}% +/- "
+                            f"{100 * row['std_top1_accuracy']:.4f}%"
+                        )
+                    lines.append(
+                        f"| {model_name} | {100 * selection_fraction:.0f}% | "
+                        f"{learning_rate:g} | {steps} | " + " | ".join(cells) + " |"
+                    )
     lines.append("")
     lines.extend([
         "## Average Runtime (minutes)", "",
-        "| Model | Selection fraction | " + " | ".join(datasets) + " |",
-        "| --- | ---: | " + " | ".join("---:" for _ in datasets) + " |",
+        "| Model | Selection fraction | Learning rate | Steps | " + " | ".join(datasets) + " |",
+        "| --- | ---: | ---: | ---: | " + " | ".join("---:" for _ in datasets) + " |",
     ])
     for model_name in models:
         for selection_fraction in selection_fractions:
-            cells = [
-                f"{by_key[(model_name, dataset_name, selection_fraction)]['average_elapsed_minutes']:.2f}"
-                for dataset_name in datasets
-            ]
-            lines.append(
-                f"| {model_name} | {100 * selection_fraction:.0f}% | "
-                + " | ".join(cells) + " |"
-            )
+            for learning_rate in learning_rates:
+                for steps in tta_steps:
+                    cells = [
+                        f"{by_key[(model_name, dataset_name, selection_fraction, learning_rate, steps)]['average_elapsed_minutes']:.2f}"
+                        for dataset_name in datasets
+                    ]
+                    lines.append(
+                        f"| {model_name} | {100 * selection_fraction:.0f}% | "
+                        f"{learning_rate:g} | {steps} | " + " | ".join(cells) + " |"
+                    )
     lines.append("")
     (output_root / "average_results.md").write_text("\n".join(lines), encoding="utf-8")
     return averages
@@ -927,6 +1011,9 @@ def write_selection_fraction_results(averages: list[dict], output_root: Path) ->
             "augment": average["augment"],
             "only_origin": average["only_origin"],
             "views": average["views"],
+            "tta_steps": average["tta_steps"],
+            "learning_rate": average["learning_rate"],
+            "weight_decay": average["weight_decay"],
             "num_seeds": average["num_seeds"],
             "seeds": average["seeds"],
             "samples_per_seed": average["samples_per_seed"],
@@ -978,6 +1065,7 @@ def write_selection_fraction_results(averages: list[dict], output_root: Path) ->
 
     chart_fields = [
         "model", "dataset", "selection_fraction", "selection_percent", "selection_count",
+        "learning_rate", "tta_steps", "weight_decay",
         "selected_views", "views", "augment", "only_origin", "top1_accuracy_percent", "top1_std_percent", "top5_accuracy_percent",
         "top5_std_percent", "average_elapsed_minutes",
     ]
@@ -993,17 +1081,19 @@ def write_selection_fraction_results(averages: list[dict], output_root: Path) ->
         writer.writerows({field: row[field] for field in chart_fields} for row in rows)
 
     lines = [
-        "# TPT Entropy Selection Fraction Sweep", "",
+        "# TPT Ablation Results", "",
         "Accuracy values are means across the configured seeds; standard deviation is the "
         "population standard deviation.", "",
-        "| Model | Dataset | Fraction | Selected views | Top-1 | Top-5 | Runtime (min) |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Model | Dataset | Fraction | Learning rate | Steps | Selected views | Top-1 | Top-5 | Runtime (min) |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         selection_label = "Only origin" if row["only_origin"] else f"{row['selection_percent']:.0f}%"
         lines.append(
             f"| {row['model']} | {row['dataset']} | "
             f"{selection_label} | "
+            f"{row['learning_rate']:g} | "
+            f"{row['tta_steps']} | "
             f"{row['selected_views']}/{row['views']} | "
             f"{row['top1_accuracy_percent']:.4f}% +/- {row['top1_std_percent']:.4f}% | "
             f"{row['top5_accuracy_percent']:.4f}% +/- {row['top5_std_percent']:.4f}% | "
@@ -1022,19 +1112,24 @@ def main():
     logger.info("config: %s", config_path)
     logger.info("resolved arguments: %s", vars(args))
 
-    sweep_jobs = [
+    ablation_jobs = [
         (*job, False)
-        for job in product(args.models, args.datasets, args.selection_values, args.seeds)
+        for job in product(
+            args.models, args.datasets, args.selection_values,
+            args.learning_rate_values, args.tta_step_values, args.seeds,
+        )
     ]
     origin_jobs = []
     if args.only_origin and args.augment:
         origin_jobs = [
-            (model_name, dataset_name, 0.0, seed, True)
+            (model_name, dataset_name, 0.0, learning_rate, steps, seed, True)
             for model_name in args.models
             for dataset_name in args.datasets
+            for learning_rate in args.learning_rate_values
+            for steps in args.tta_step_values
             for seed in args.seeds
         ]
-    jobs = sweep_jobs + origin_jobs
+    jobs = ablation_jobs + origin_jobs
     worker_count = min(len(args.devices), len(jobs))
     devices = args.devices[:worker_count]
     assignments = [[] for _ in devices]
@@ -1068,6 +1163,12 @@ def main():
     if origin_jobs:
         fraction_order[0.0] = -1
     seed_order = {seed: index for index, seed in enumerate(args.seeds)}
+    learning_rate_order = {
+        rate: index for index, rate in enumerate(args.learning_rate_values)
+    }
+    tta_step_order = {
+        steps: index for index, steps in enumerate(args.tta_step_values)
+    }
     spawn_context = multiprocessing.get_context("spawn")
     progress_lock = spawn_context.RLock()
 
@@ -1083,15 +1184,16 @@ def main():
         ]
         futures = {}
         for executor, device_name, device_jobs in zip(executors, devices, assignments):
-            for model_name, dataset_name, selection_fraction, seed, origin_only_job in device_jobs:
+            for (model_name, dataset_name, selection_fraction, learning_rate,
+                 tta_steps, seed, origin_only_job) in device_jobs:
                 future = executor.submit(
                     evaluate_job, serialized_args, model_name, dataset_name, seed,
-                    selection_fraction, device_name, devices.index(device_name),
-                    seed_log_paths[seed], origin_only_job,
+                    selection_fraction, learning_rate, tta_steps, device_name,
+                    devices.index(device_name), seed_log_paths[seed], origin_only_job,
                 )
                 futures[future] = (
-                    model_name, dataset_name, selection_fraction, seed, device_name,
-                    origin_only_job,
+                    model_name, dataset_name, selection_fraction, learning_rate,
+                    tta_steps, seed, device_name, origin_only_job,
                 )
 
         for future in as_completed(futures):
@@ -1099,7 +1201,9 @@ def main():
             results.append(result)
             results.sort(key=lambda item: (
                 model_order[item.model], dataset_order[item.dataset],
-                fraction_order[item.selection_fraction], seed_order[item.seed]
+                fraction_order[item.selection_fraction],
+                learning_rate_order[item.learning_rate],
+                tta_step_order[item.tta_steps], seed_order[item.seed]
             ))
             seed_results = [item for item in results if item.seed == result.seed]
             write_results(seed_results, args.output_root / f"seed_{result.seed}")
@@ -1109,7 +1213,8 @@ def main():
                 f"fraction={result.selection_fraction:.2%}"
             )
             print(
-                f"[RESULT] {result.device} {mode_label} "
+                f"[RESULT] {result.device} {mode_label} lr={result.learning_rate:g} "
+                f"steps={result.tta_steps} "
                 f"seed={result.seed} {result.model} {result.dataset}: "
                 f"{result.correct_top1}/{result.samples} "
                 f"({100 * result.top1_accuracy:.4f}%)",
@@ -1119,15 +1224,21 @@ def main():
     summary_root = args.output_root / "summary"
     write_results(results, summary_root)
     averages = write_average_results(
-        results, summary_root, args.models, args.datasets, args.selection_values
+        results, summary_root, args.models, args.datasets, args.selection_values,
+        args.learning_rate_values, args.tta_step_values,
     )
     chart_data_path = write_selection_fraction_results(averages, summary_root)
     if args.plot["enabled"]:
-        from plot_tpt_selection_sweep import generate_plots
+        if args.plot["kind"] == "lr_steps":
+            from plot_tpt_lr_steps_ablation import generate_plots
+        else:
+            from plot_tpt_selection_ablation import generate_plots
 
         plot_paths = generate_plots(
             args.plot["config"], data_path=chart_data_path,
-            output_dir=summary_root / "plots",
+            output_dir=(summary_root / "lr_steps_plots"
+                        if args.plot["kind"] == "lr_steps"
+                        else summary_root / "plots"),
         )
         logger.info("generated plots: %s", ", ".join(map(str, plot_paths)))
     logger.info("wrote seed-specific results under %s and summary to %s",

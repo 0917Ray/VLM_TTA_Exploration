@@ -1,6 +1,6 @@
 # VLM CLIP Test-Time Adaptation
 
-本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），并支持在 ImageNet-V2、ImageNet-A、ImageNet-R、ImageNet-Sketch 上比较不同低熵视图筛选策略。
+本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），支持在 ImageNet-V2、ImageNet-A、ImageNet-R、ImageNet-Sketch 上评测标准 TPT，并比较低熵视图筛选数量、learning rate 和每张图像的 prompt 更新步数。
 
 ## 从零开始
 
@@ -26,6 +26,7 @@ python -m pip install torch==2.9.1 torchvision==0.24.1 \
   --index-url https://download.pytorch.org/whl/cu130
 python -m pip install 'setuptools<81'
 python -m pip install --no-build-isolation -r requirements.txt
+clip-evaluate --help
 ```
 
 其他 CUDA 或 CPU 环境请使用 [PyTorch 官方安装命令](https://pytorch.org/get-started/locally/)。完整说明见[准备工作](guide/preparation.md)。
@@ -72,12 +73,26 @@ python scripts/evaluate_tpt.py \
 
 ### 4. 运行实验
 
-Pure CLIP zero-shot：
+当前配置概览：
+
+| 工作流 | 当前范围 | 结果组合数 | 输出目录 |
+| --- | --- | ---: | --- |
+| Pure CLIP zero-shot | 2 模型 × 4 数据集 × 3 seeds | 24 | `runs/clip_zero_shot/` |
+| 标准 TPT | 2 模型 × 4 数据集 × 3 seeds | 24 | `runs/tpt_classification/` |
+| 低熵视图 count 消融 | ImageNet-A、ViT-B/16、count 1-10、Only origin、seed 42 | 11 | `runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/` |
+| 一步 LR 消融 | ImageNet-A、ViT-B/16、10 个 LR、count 1、seed 42 | 10 | `runs/tpt_lr_ablation/idea_one_step_TTA/` |
+| LR × Steps | ImageNet-A、ViT-B/16、7 个 LR × 10 个 steps、count 1、seed 42 | 70 | `runs/tpt_lr_steps_ablation/idea_no_weight_decay/` |
+
+三个消融当前都只有一个 seed，适合探索超参数，不能用标准差判断跨 seed 稳定性。LR × Steps 配置当前实际使用 `weight_decay: 0.05`；`idea_no_weight_decay` 只是已有历史目录名，不代表实验参数。
+
+Pure CLIP zero-shot（安装后提供 `clip-evaluate` 命令）：
 
 ```bash
-python scripts/evaluate_clip_zeroshot.py \
+clip-evaluate \
   --config configs/evaluation/clip_zero_shot.yaml
 ```
+
+仓库脚本 `python scripts/evaluate_clip_zeroshot.py ...` 调用同一实现，参数完全一致。
 
 标准 TPT（64 views、最低熵 10%、Top-1 至 Top-5）：
 
@@ -86,20 +101,34 @@ python scripts/evaluate_tpt.py \
   --config configs/evaluation/tpt_classification.yaml
 ```
 
-低熵视图 count sweep、Only origin、CLIP zero-shot 基线和自动绘图：
+低熵视图 count 消融、Only origin、CLIP zero-shot 基线和自动绘图：
 
 ```bash
 python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_selection_fraction_sweep.yaml
+  --config configs/evaluation/tpt_selection_fraction_ablation.yaml
 ```
 
-该 sweep 的结果位于：
+一步 TPT 的 learning-rate 消融：
+
+```bash
+python scripts/evaluate_tpt.py \
+  --config configs/evaluation/tpt_lr_ablation.yaml
+```
+
+Learning rate 与更新步数的二维消融（当前 `weight_decay: 0.05`）：
+
+```bash
+python scripts/evaluate_tpt.py \
+  --config configs/evaluation/tpt_lr_steps_ablation.yaml
+```
+
+低熵视图消融的结果位于：
 
 ```text
-runs/tpt_selection_fraction_sweep/idea_count_sweep_zero_shot/summary/
+runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 ```
 
-图中横轴依次包含 `CLIP zero-shot`、`Only origin` 和 count/fraction 筛选设置。详细配置见[TPT 筛选与绘图](guide/tpt_selection_fraction_sweep.md)。
+图中横轴依次包含 `CLIP zero-shot`、`Only origin` 和 count/fraction 筛选设置。详细配置见[TPT Selection Fraction 消融](guide/tpt_selection_fraction_ablation.md)。
 
 ## 评测协议
 
@@ -124,7 +153,9 @@ runs/tpt_selection_fraction_sweep/idea_count_sweep_zero_shot/summary/
 - [Pure CLIP Zero-shot](guide/clip_test.md)：协议、smoke test、正式运行和输出。
 - [TPT 图像分类](guide/tpt_classification.md)：标准 TPT、参数和结果结构。
 - [TPT Quick Demo](guide/tpt_quick_demo.md)：用较小任务逐步验证多 GPU TPT。
-- [TPT 筛选与绘图](guide/tpt_selection_fraction_sweep.md)：fraction/count、Only origin、Top-k、zero-shot 类别和重绘。
+- [TPT Selection Fraction 消融](guide/tpt_selection_fraction_ablation.md)：fraction/count、Only origin、Top-k、zero-shot 类别和重绘。
+- [TPT Learning-rate 消融](guide/tpt_lr_ablation.md)：一步 TPT 的 10 个学习率、自动绘图和结果边界。
+- [TPT LR × Steps 消融](guide/tpt_lr_steps_ablation.md)：二维扫描、weight decay 语义、最佳步数和热力图。
 - [GitHub 同步](guide/github_sync.md)：只同步代码、配置和文档。
 
 ## 目录

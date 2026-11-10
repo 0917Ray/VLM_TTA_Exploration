@@ -23,7 +23,14 @@ from tqdm import tqdm
 import yaml
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+def find_project_root() -> Path:
+    source_root = Path(__file__).resolve().parents[1]
+    if (source_root / "pyproject.toml").is_file():
+        return source_root
+    return Path.cwd().resolve()
+
+
+PROJECT_ROOT = find_project_root()
 DATASET_NAMES = ("imagenetv2", "imagenet-a", "imagenet-r", "imagenet-sketch")
 MODEL_PATHS = {
     "RN50": PROJECT_ROOT / "models/RN50.pt",

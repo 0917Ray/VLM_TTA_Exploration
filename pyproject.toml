@@ -10,14 +10,12 @@ requires-python = ">=3.10"
 dependencies = ["torch>=2.0", "torchvision>=0.15", "Pillow>=9", "PyYAML>=6", "tqdm>=4", "ftfy", "regex", "setuptools>=68,<81"]
 
 [project.scripts]
-clip-evaluate = "vlm_clip.cli.evaluate:main"
+clip-evaluate = "evaluate_clip_zeroshot:main"
 
 [project.optional-dependencies]
 data = ["gdown>=5"]
 visualization = ["matplotlib>=3.6", "numpy>=1.23"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-"vlm_clip.data" = ["*.json"]
+[tool.setuptools]
+package-dir = {"" = "scripts"}
+py-modules = ["evaluate_clip_zeroshot"]

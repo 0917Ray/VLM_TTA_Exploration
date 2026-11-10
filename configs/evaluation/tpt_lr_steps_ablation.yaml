@@ -1,0 +1,40 @@
+data_root: data/raw
+class_index: configs/visualization/imagenet_class_index.json
+class_names: configs/evaluation/imagenet_classes_tpt.json
+model_root: models
+output_root: runs/tpt_lr_steps_ablation
+idea: no_weight_decay
+datasets:
+  - imagenet-a
+models:
+  - ViT-B/16
+devices:
+  - cuda:0
+  - cuda:1
+  - cuda:2
+  - cuda:3
+seeds:
+  # - 11
+  - 42
+  # - 123
+num_workers: 4
+views: 64
+selection_fractions: false
+fraction_options: [0.1]
+selection_counts: true
+count_options: [1]
+augment: true
+only_origin: false
+top_k: 5
+tta_step_options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+learning_rates: [0.001, 0.002, 0.003, 0.005, 0.01, 0.02, 0.05]
+weight_decay: 0.05
+prompt_init: "a photo of a"
+resolution: 224
+print_frequency: 100
+limit: null
+log_file: run.log
+plot:
+  enabled: true
+  kind: lr_steps
+  config: configs/visualization/tpt_lr_steps_ablation_plots.json

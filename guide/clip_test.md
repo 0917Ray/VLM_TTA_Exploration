@@ -2,6 +2,8 @@
 
 该流程使用冻结的 OpenAI CLIP 和单模板 `a photo of a {}.`，不进行训练、微调或测试时自适应。
 
+安装 `requirements.txt` 后可使用 `clip-evaluate`。它和 `python scripts/evaluate_clip_zeroshot.py` 指向同一个 `main()`，下文保留脚本形式以明确源码入口；两者的参数完全相同。
+
 ## 评测协议
 
 - 模型：`RN50`、`ViT-B/16`。
@@ -22,7 +24,7 @@ conda activate clip
 ls models/RN50.pt models/ViT-B-16.pt
 ```
 
-默认配置还要求四个目录存在：
+配置中启用的数据集目录必须存在，例如：
 
 ```text
 data/raw/imagenetv2/
@@ -46,7 +48,7 @@ python scripts/evaluate_clip_zeroshot.py \
 
 ## 3. 正式评测
 
-默认配置评测两个模型、四个数据集和三个 seed，并在四张 GPU 上调度八个 `(model, dataset)` 任务：
+正式评测的范围和参数由 `configs/evaluation/clip_zero_shot.yaml` 定义：
 
 ```bash
 python scripts/evaluate_clip_zeroshot.py \
@@ -75,31 +77,31 @@ CLI 覆盖只影响当前运行，不修改 YAML。
 
 `configs/evaluation/clip_zero_shot.yaml` 的路径相对于仓库根目录解析。
 
-| 参数 | 当前值 | 含义 |
-| --- | --- | --- |
-| `data_root` | `data/raw` | 四个数据集的父目录。 |
-| `class_index` | `configs/visualization/imagenet_class_index.json` | ImageNet index、WNID 和名称映射。 |
-| `class_names` | `configs/evaluation/imagenet_classes_tpt.json` | 构造 prompt 的 1000 类 TPT 名称。 |
-| `model_root` | `models` | `RN50.pt`、`ViT-B-16.pt` 所在目录。 |
-| `output_root` | `runs/clip_zero_shot` | 结果和日志目录。 |
-| `datasets` | 四个 variants | 允许 `imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch`。 |
-| `models` | 两个 CLIP 模型 | 允许 `RN50`、`ViT-B/16`。 |
-| `batch_size` | `512` | 每个并行任务的图像 batch size。显存不足时降低。 |
-| `num_workers` | `12` | 每个并行任务的数据加载进程数；排错时使用 `0`。 |
-| `devices` | `cuda:0` 至 `cuda:3` | 调度设备；每张 GPU 同时运行一个任务。 |
-| `prompt_template` | `a photo of a {}.` | 必须包含可插入类别名称的 `{}`。 |
-| `seeds` | `42, 43, 44` | 每个任务依次记录的 seed。 |
-| `limit` | `null` | 每个数据集最多处理的样本数；`null` 表示全部。 |
-| `log_file` | `run.log` | 实际写为带时间戳的日志文件。 |
+| 参数 | 含义 |
+| --- | --- |
+| `data_root` | 数据集父目录。 |
+| `class_index` | ImageNet index、WNID 和名称映射文件。 |
+| `class_names` | 构造 prompt 的类别名称文件。 |
+| `model_root` | CLIP checkpoint 所在目录。 |
+| `output_root` | 结果和日志目录。 |
+| `datasets` | 评测数据集列表；支持 `imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch`。 |
+| `models` | 评测模型列表；支持 `RN50`、`ViT-B/16`。 |
+| `batch_size` | 每个并行任务的图像 batch size；显存不足时降低。 |
+| `num_workers` | 每个并行任务的数据加载进程数；排错时可使用 `0`。 |
+| `devices` | 调度设备列表；每张 GPU 同时运行一个任务。 |
+| `prompt_template` | prompt 模板，必须包含可插入类别名称的 `{}`。 |
+| `seeds` | 每个任务依次记录的 seeds。 |
+| `limit` | 每个数据集最多处理的样本数；空值表示全部。 |
+| `log_file` | 日志文件的基础名称；实际文件名带时间戳。 |
 
-同名 CLI 参数使用连字符，例如 `batch_size` 对应 `--batch-size`。`batch_size` 和 `num_workers` 都是每个并行任务的值；四张 GPU、每任务 12 workers 时最多约有 48 个 DataLoader workers。
+同名 CLI 参数使用连字符，例如 `batch_size` 对应 `--batch-size`。`batch_size` 和 `num_workers` 都是每个并行任务的值，总 DataLoader worker 数约为并行任务数乘以 `num_workers`。
 
 zero-shot 预处理没有随机增强，所以多个 seed 通常得到相同结果。保留 seeds 是为了统一实验记录格式。
 
 ## 输出
 
 ```text
-runs/clip_zero_shot/
+<output_root>/
   results.csv
   results.json
   average_results.csv
