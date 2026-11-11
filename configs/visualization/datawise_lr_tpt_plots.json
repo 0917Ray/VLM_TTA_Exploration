@@ -1,0 +1,54 @@
+{
+  "enabled": true,
+  "data": {
+    "evaluation_config": "../evaluation/datawise_lr_tpt.yaml",
+    "accuracy": null,
+    "distribution": null,
+    "source": null
+  },
+  "figure": {
+    "figsize": [9.5, 5.2],
+    "dpi": 300,
+    "transparent": true,
+    "title_pad": 30
+  },
+  "bars": {
+    "group_width": 0.76,
+    "face_alpha": 0.5,
+    "edge_alpha": 0.95,
+    "edge_width": 1.8
+  },
+  "errorbar": {
+    "enabled": true,
+    "color": "#3A3D42",
+    "alpha": 0.82,
+    "linewidth": 1.05,
+    "capsize": 3.0
+  },
+  "value_labels": {
+    "accuracy": true,
+    "distribution": true,
+    "format": "{:.1f}",
+    "fontsize": 8.0
+  },
+  "axis": {
+    "accuracy_ylim": [0, 110],
+    "distribution_ylim": [0, 110],
+    "grid": true,
+    "x_tick_rotation": 0
+  },
+  "spines": {
+    "linewidth": 2.2,
+    "color": "#3A3D42"
+  },
+  "legend": {
+    "location": "upper center",
+    "anchor": [0.5, 1.02],
+    "columns": 3
+  },
+  "colors": ["#4F7C65", "#A75B73", "#4C78A8", "#8F6AAE", "#D08C3F"],
+  "output": {
+    "pdf": true,
+    "directory": null
+  }
+}

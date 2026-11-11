@@ -656,12 +656,13 @@ def set_seed(seed: int):
 
 
 def accumulate_topk_correct(logits: torch.Tensor, labels: torch.Tensor,
-                            global_indices: torch.Tensor, counts: list[int]) -> None:
+                            global_indices: torch.Tensor, counts: list[int]) -> torch.Tensor:
     local_topk = logits.topk(k=min(len(counts), logits.shape[1]), dim=1).indices
     predictions = global_indices[local_topk]
     matches = predictions == labels.unsqueeze(1)
     for index in range(predictions.shape[1]):
         counts[index] += int(matches[:, :index + 1].any(dim=1).sum().item())
+    return predictions
 
 
 def evaluate_job(serialized_args: dict, model_name: str, dataset_name: str, seed: int,

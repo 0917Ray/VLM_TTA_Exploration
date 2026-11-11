@@ -1,6 +1,6 @@
 # VLM CLIP Test-Time Adaptation
 
-本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），支持在 ImageNet-V2、ImageNet-A、ImageNet-R、ImageNet-Sketch 上评测标准 TPT，并比较低熵视图筛选数量、learning rate 和每张图像的 prompt 更新步数。
+本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），支持在 ImageNet-V2、ImageNet-A、ImageNet-R、ImageNet-Sketch 上评测标准 TPT，并比较低熵视图筛选数量、learning rate、每张图像的 prompt 更新步数和逐样本 learning-rate selection。
 
 ## 从零开始
 
@@ -42,7 +42,7 @@ data/raw/imagenet-r/<wnid>/...
 data/raw/imagenet-sketch/<wnid>/...
 ```
 
-下载与解压命令见[准备工作](guide/preparation.md#数据集准备)。下载 CLIP 权重：
+下载与解压命令见[准备工作](guide/preparation.md#2-数据集准备)。下载 CLIP 权重：
 
 ```bash
 mkdir -p models
@@ -73,17 +73,16 @@ python scripts/evaluate_tpt.py \
 
 ### 4. 运行实验
 
-当前配置概览：
+工作流映射如下；实际模型、数据集、seeds 和实验网格始终以对应 YAML 与运行生成的 `resolved_config.yaml` 为准。
 
-| 工作流 | 当前范围 | 结果组合数 | 输出目录 |
-| --- | --- | ---: | --- |
-| Pure CLIP zero-shot | 2 模型 × 4 数据集 × 3 seeds | 24 | `runs/clip_zero_shot/` |
-| 标准 TPT | 2 模型 × 4 数据集 × 3 seeds | 24 | `runs/tpt_classification/` |
-| 低熵视图 count 消融 | ImageNet-A、ViT-B/16、count 1-10、Only origin、seed 42 | 11 | `runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/` |
-| 一步 LR 消融 | ImageNet-A、ViT-B/16、10 个 LR、count 1、seed 42 | 10 | `runs/tpt_lr_ablation/idea_one_step_TTA/` |
-| LR × Steps | ImageNet-A、ViT-B/16、7 个 LR × 10 个 steps、count 1、seed 42 | 70 | `runs/tpt_lr_steps_ablation/idea_no_weight_decay/` |
-
-三个消融当前都只有一个 seed，适合探索超参数，不能用标准差判断跨 seed 稳定性。LR × Steps 配置当前实际使用 `weight_decay: 0.05`；`idea_no_weight_decay` 只是已有历史目录名，不代表实验参数。
+| 工作流 | 配置 | 执行入口 | 输出根目录 |
+| --- | --- | --- | --- |
+| Pure CLIP zero-shot | `configs/evaluation/clip_zero_shot.yaml` | `clip-evaluate` | `runs/clip_zero_shot/` |
+| 标准 TPT | `configs/evaluation/tpt_classification.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_classification/` |
+| 低熵视图消融 | `configs/evaluation/tpt_selection_fraction_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_selection_fraction_ablation/` |
+| 一步 LR 消融 | `configs/evaluation/tpt_lr_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_lr_ablation/` |
+| LR × Steps 消融 | `configs/evaluation/tpt_lr_steps_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_lr_steps_ablation/` |
+| Data-wise LR TPT | `configs/evaluation/datawise_lr_tpt.yaml` | `scripts/evaluate_datawise_lr_tpt.py` | `runs/datawise_lr_tpt/` |
 
 Pure CLIP zero-shot（安装后提供 `clip-evaluate` 命令）：
 
@@ -122,6 +121,15 @@ python scripts/evaluate_tpt.py \
   --config configs/evaluation/tpt_lr_steps_ablation.yaml
 ```
 
+逐样本遍历候选 LR、按 post-update entropy 选择并绘制 LR 比例与正确率：
+
+```bash
+python scripts/evaluate_datawise_lr_tpt.py \
+  --config configs/evaluation/datawise_lr_tpt.yaml
+```
+
+Data-wise LR TPT 将一个完整任务定义为 `seed × model × dataset × selection setting × step setting`，每张 GPU 同时最多运行一个完整任务。每个 seed 会生成独立 summary 和图表，顶层 summary 同时保存逐 seed 结果与跨 seed 平均值；完整说明见 [Data-wise LR TPT](guide/datawise_lr_tpt.md)。
+
 低熵视图消融的结果位于：
 
 ```text
@@ -147,6 +155,17 @@ runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 | CLIP-RN50 | 51.4600% | 21.8533% | 56.1167% | 33.3589% |
 | CLIP-ViT-B/16 | 60.8800% | 47.8267% | 73.9833% | 46.1023% |
 
+## 已验证的 Data-wise LR TPT 结果
+
+在 ImageNet-A、ViT-B/16、64 views、最低 entropy 的 1 个 view、one-step AdamW、`weight_decay=0.01` 和 seeds `42, 123` 下，逐样本在 9 个候选 LR 中按 post-update entropy 选择，得到：
+
+| 方法 | Top-1 | Top-5 | Seeds | 不确定性 |
+| --- | ---: | ---: | ---: | --- |
+| CLIP zero-shot | 47.8800% | 78.1600% | 2 | 两个 seed 相同 |
+| Data-wise LR TPT | 55.5000% | 81.1333% | 2 | sample standard deviation：Top-1 `0.2734 pp`，Top-5 `0.0754 pp` |
+
+该结果只描述上述已完成协议，不代表其他模型、数据集、selection 设置或多步设置。测试标签不参与 LR 选择。
+
 ## 文档
 
 - [准备工作](guide/preparation.md)：环境、数据、权重和数据可视化。
@@ -156,6 +175,7 @@ runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 - [TPT Selection Fraction 消融](guide/tpt_selection_fraction_ablation.md)：fraction/count、Only origin、Top-k、zero-shot 类别和重绘。
 - [TPT Learning-rate 消融](guide/tpt_lr_ablation.md)：一步 TPT 的 10 个学习率、自动绘图和结果边界。
 - [TPT LR × Steps 消融](guide/tpt_lr_steps_ablation.md)：二维扫描、weight decay 语义、最佳步数和热力图。
+- [Data-wise LR TPT](guide/datawise_lr_tpt.md)：逐样本 entropy LR 选择、多步轨迹、逐样本记录、LR 比例与正确率绘图。
 - [GitHub 同步](guide/github_sync.md)：只同步代码、配置和文档。
 
 ## 目录
@@ -167,4 +187,5 @@ guide/     # 复现文档
 models/    # 本地 CLIP 权重，不提交 Git
 runs/      # 本地实验输出，不提交 Git
 scripts/   # 评测、绘图和可视化入口
+tests/     # 关键配置、调度、汇总和数值一致性测试
 ```

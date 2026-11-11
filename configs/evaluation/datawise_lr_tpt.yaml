@@ -1,0 +1,54 @@
+data_root: data/raw
+class_index: configs/visualization/imagenet_class_index.json
+class_names: configs/evaluation/imagenet_classes_tpt.json
+model_root: models
+output_root: runs/datawise_lr_tpt
+idea: entropy_min_imagenet_a_2_seeds
+run_name: null
+
+datasets:
+  # - imagenetv2
+  - imagenet-a
+  # - imagenet-r
+  # - imagenet-sketch
+models:
+  # - RN50
+  - ViT-B/16
+devices:
+  - cuda:0
+  - cuda:1
+  # - cuda:2
+  # - cuda:3
+seeds:
+  # - 11
+  - 42
+  - 123
+
+num_workers: 2
+views: 64
+selection_fractions: false
+fraction_options: [0.1]
+selection_counts: true
+count_options: [1] # [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+top_k: 5
+tta_step_options: [1]
+candidate_lrs:
+  - 0.0005
+  - 0.001
+  - 0.002
+  - 0.003
+  - 0.004
+  - 0.005
+  - 0.01
+  - 0.02
+  - 0.05
+weight_decay: 0.01
+prompt_init: "a photo of a"
+resolution: 224
+print_frequency: 100
+limit: null
+log_file: run.log
+
+plot:
+  enabled: true
+  config: configs/visualization/datawise_lr_tpt_plots.json
