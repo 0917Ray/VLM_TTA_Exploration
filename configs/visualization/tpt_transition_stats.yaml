@@ -1,0 +1,75 @@
+enabled: true
+
+data:
+  evaluation_config: ../evaluation/tpt_transition_stats.yaml
+  accuracy: null
+  loss: null
+
+figure:
+  figsize: [8.8, 5.2]
+  dpi: 300
+  transparent: false
+
+bars:
+  width: 0.68
+  face_alpha: 0.5
+  edge_alpha: 0.95
+  edge_width: 2.0
+  value_labels: true
+  value_format: "{:.1f}%"
+  value_fontsize: 9.0
+
+errorbar:
+  enabled: true
+  color: "#30343B"
+  alpha: 0.82
+  linewidth: 1.1
+  capsize: 3.5
+
+axis:
+  ylabel: "Samples (%)"
+  ylim: [0, 105]
+  grid: true
+  grid_color: "#D8DCE2"
+  grid_alpha: 0.8
+  tick_rotation: 0
+
+spines:
+  linewidth: 2.5
+  color: "#3A3D42"
+
+colors:
+  accuracy: ["#5E887E", "#BA6580", "#5B7CA7", "#75668A"]
+  loss: ["#5E887E", "#BA6580", "#75668A", "#5B7CA7"]
+
+annotations:
+  accuracy:
+    enabled: true
+    offset_points: 20.0
+    marker_size: 18.0
+    symbol_linewidth: 2.4
+    symbol_color: "#FFFFFF"
+    cross_color: "#C74E52"
+    check_color: "#4F806B"
+    transitions:
+      correct_to_wrong: cross
+      wrong_to_correct: check
+  loss:
+    enabled: true
+    offset_points: 20.0
+    marker_size: 18.0
+    symbol_linewidth: 2.4
+    symbol_color: "#FFFFFF"
+    cross_color: "#C74E52"
+    check_color: "#4F806B"
+    transitions:
+      entropy_down_ce_down: check
+      entropy_down_ce_up_or_equal: cross
+
+titles:
+  accuracy: "Prediction Correctness Transitions"
+  loss: "Entropy and Supervised Cross-Entropy Transitions"
+
+output:
+  directory: null
+  pdf: true

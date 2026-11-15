@@ -1,6 +1,6 @@
 # VLM CLIP Test-Time Adaptation
 
-本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），支持在 ImageNet-V2、ImageNet-A、ImageNet-R、ImageNet-Sketch 上评测标准 TPT，并比较低熵视图筛选数量、learning rate、每张图像的 prompt 更新步数和逐样本 learning-rate selection。
+本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），支持在 ImageNet-V2、ImageNet-A、ImageNet-R、ImageNet-Sketch 上评测标准 TPT，并比较低熵视图筛选数量、learning rate、每张图像的 prompt 更新步数、逐样本 learning-rate selection，以及 TPT 前后的预测与监督 loss 状态转移。
 
 ## 从零开始
 
@@ -83,6 +83,7 @@ python scripts/evaluate_tpt.py \
 | 一步 LR 消融 | `configs/evaluation/tpt_lr_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_lr_ablation/` |
 | LR × Steps 消融 | `configs/evaluation/tpt_lr_steps_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_lr_steps_ablation/` |
 | Data-wise LR TPT | `configs/evaluation/datawise_lr_tpt.yaml` | `scripts/evaluate_datawise_lr_tpt.py` | `runs/datawise_lr_tpt/` |
+| TPT 状态转移统计 | `configs/evaluation/tpt_transition_stats.yaml` | `scripts/evaluate_tpt_transition_stats.py` | `runs/tpt_transition_stats/` |
 
 Pure CLIP zero-shot（安装后提供 `clip-evaluate` 命令）：
 
@@ -130,6 +131,15 @@ python scripts/evaluate_datawise_lr_tpt.py \
 
 Data-wise LR TPT 将一个完整任务定义为 `seed × model × dataset × selection setting × step setting`，每张 GPU 同时最多运行一个完整任务。每个 seed 会生成独立 summary 和图表，顶层 summary 同时保存逐 seed 结果与跨 seed 平均值；完整说明见 [Data-wise LR TPT](guide/datawise_lr_tpt.md)。
 
+统计 TPT 前后的正确/错误转移，以及 entropy 与真实标签 cross-entropy 的升降组合：
+
+```bash
+python scripts/evaluate_tpt_transition_stats.py \
+  --config configs/evaluation/tpt_transition_stats.yaml
+```
+
+默认运行 ImageNet-A、ViT-B/16、seed 123 和 LR 0.003，并自动生成两张四分类柱状图。多数据集、多 LR 和多 seed 会展开为独立完整任务并轮询分配到配置的 GPU；协议、smoke test 和输出说明见 [TPT 状态转移统计](guide/tpt_transition_stats.md)。
+
 低熵视图消融的结果位于：
 
 ```text
@@ -176,6 +186,7 @@ runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 - [TPT Learning-rate 消融](guide/tpt_lr_ablation.md)：一步 TPT 的 10 个学习率、自动绘图和结果边界。
 - [TPT LR × Steps 消融](guide/tpt_lr_steps_ablation.md)：二维扫描、weight decay 语义、最佳步数和热力图。
 - [Data-wise LR TPT](guide/datawise_lr_tpt.md)：逐样本 entropy LR 选择、多步轨迹、逐样本记录、LR 比例与正确率绘图。
+- [TPT 状态转移统计](guide/tpt_transition_stats.md)：一步 TPT 前后正确性转移、entropy/监督 CE 转移、多 GPU 调度和柱状图重绘。
 - [GitHub 同步](guide/github_sync.md)：只同步代码、配置和文档。
 
 ## 目录
