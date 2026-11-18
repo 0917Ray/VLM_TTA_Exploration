@@ -74,6 +74,12 @@ tar -xf data/downloads/imagenetv2-matched-frequency.tar \
   -C data/raw/imagenetv2
 ```
 
+```bash
+mv data/raw/imagenetv2/imagenetv2-matched-frequency-format-val/* data/raw/imagenetv2/
+rmdir data/raw/imagenetv2/imagenetv2-matched-frequency-format-val
+```
+
+
 ### ImageNet-A
 
 ```bash
@@ -82,6 +88,11 @@ wget -c -O data/downloads/imagenet-a.tar \
 mkdir -p data/raw/imagenet-a
 tar -xf data/downloads/imagenet-a.tar \
   -C data/raw/imagenet-a
+```
+
+```bash
+mv data/raw/imagenet-a/imagenet-a/* data/raw/imagenet-a/
+rmdir data/raw/imagenet-a/imagenet-a
 ```
 
 ### ImageNet-R
@@ -94,16 +105,35 @@ tar -xf data/downloads/imagenet-r.tar \
   -C data/raw/imagenet-r
 ```
 
+```bash
+mv data/raw/imagenet-r/imagenet-r/* data/raw/imagenet-r/
+rmdir data/raw/imagenet-r/imagenet-r
+```
+
 ### ImageNet-Sketch
 
-通过 [Google Drive](https://drive.google.com/open?id=1Mj0i5HBthqH1p_yeXzsg22gZduvgoNeA) 压缩包下载并解压：
+通过 [Hugging Face](https://huggingface.co/datasets/nateraw/imagenet-sketch-data/resolve/main/ImageNet-Sketch.zip) 压缩包下载并解压：
 
 ```bash
-python -m pip install gdown
-gdown 'https://drive.google.com/uc?id=1Mj0i5HBthqH1p_yeXzsg22gZduvgoNeA' \
-  -O data/downloads/imagenet-sketch.zip
+mkdir -p data/downloads
+
+curl -L --fail --retry 5 --retry-delay 10 -C - \
+  -o data/downloads/imagenet-sketch-hf.zip \
+  'https://huggingface.co/datasets/nateraw/imagenet-sketch-data/resolve/main/ImageNet-Sketch.zip'
+```
+
+```bash
+printf '%s  %s\n' \
+  '4d3ce6b82a7c48aabf14aeac105eb533e75707f152cc858f55bfc022031a72ed' \
+  'data/downloads/imagenet-sketch-hf.zip' | sha256sum -c -
+```
+
+```bash
 mkdir -p data/raw/imagenet-sketch
-unzip -q data/downloads/imagenet-sketch.zip -d data/raw/imagenet-sketch
+
+unzip -q data/downloads/imagenet-sketch-hf.zip -d data/raw &&
+mv data/raw/sketch/* data/raw/imagenet-sketch/ &&
+rmdir data/raw/sketch
 ```
 
 解压后确保 (手动移动、增删文件即可) 每个数据集目录下面直接是类别目录（数字或 WNID），图像放在类别目录内. 例如：
@@ -117,6 +147,7 @@ data/raw/imagenet-sketch/n01440764/...    # 1000 个 WNID 目录
 
 ### 校验目录
 
+检查：
 ```bash
 for dataset in imagenetv2 imagenet-a imagenet-r imagenet-sketch; do
   printf '%-18s ' "$dataset"
@@ -124,8 +155,13 @@ for dataset in imagenetv2 imagenet-a imagenet-r imagenet-sketch; do
 done
 ```
 
-预期结果：
-- 上面四行应依次显示 `1000`、`200`、`200`、`1000`
+预期输出：
+```
+imagenetv2         1000
+imagenet-a         200
+imagenet-r         200
+imagenet-sketch    1000
+```
 
 
 ## 3. 下载 CLIP 权重
