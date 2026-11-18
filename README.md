@@ -1,6 +1,6 @@
-# VLM CLIP Test-Time Adaptation
+# VLM CLIP Adaptation Experiments
 
-本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），支持在 ImageNet-V2、ImageNet-A、ImageNet-R、ImageNet-Sketch 上评测标准 TPT，并比较低熵视图筛选数量、learning rate、每张图像的 prompt 更新步数、逐样本 learning-rate selection，以及 TPT 前后的预测与监督 loss 状态转移。
+本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），并分析低熵视图筛选、学习率、更新步数以及逐样本学习率选择对结果的影响。
 
 ## 从零开始
 
@@ -29,7 +29,7 @@ python -m pip install --no-build-isolation -r requirements.txt
 clip-evaluate --help
 ```
 
-其他 CUDA 或 CPU 环境请使用 [PyTorch 官方安装命令](https://pytorch.org/get-started/locally/)。完整说明见[准备工作](guide/preparation.md)。
+其他 CUDA 或 CPU 环境请使用 [PyTorch 官方安装命令](https://pytorch.org/get-started/locally/)。完整说明见[准备工作](guide/0_preparation.md)。
 
 ### 2. 准备数据和权重
 
@@ -42,7 +42,7 @@ data/raw/imagenet-r/<wnid>/...
 data/raw/imagenet-sketch/<wnid>/...
 ```
 
-下载与解压命令见[准备工作](guide/preparation.md#2-数据集准备)。下载 CLIP 权重：
+下载与解压命令见[准备工作](guide/0_preparation.md#2-数据集准备)。下载 CLIP 权重：
 
 ```bash
 mkdir -p models
@@ -61,8 +61,8 @@ PY
 先用一张 GPU、少量样本验证完整 TPT 管线：
 
 ```bash
-python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_classification.yaml \
+python scripts/2_evaluate_tpt.py \
+  --config configs/evaluation/2_tpt_classification.yaml \
   --models ViT-B/16 --datasets imagenet-a \
   --devices cuda:0 --seeds 42 --num-workers 0 \
   --views 8 --selection-fraction 0.25 --limit 8 \
@@ -77,76 +77,86 @@ python scripts/evaluate_tpt.py \
 
 | 工作流 | 配置 | 执行入口 | 输出根目录 |
 | --- | --- | --- | --- |
-| Pure CLIP zero-shot | `configs/evaluation/clip_zero_shot.yaml` | `clip-evaluate` | `runs/clip_zero_shot/` |
-| 标准 TPT | `configs/evaluation/tpt_classification.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_classification/` |
-| 低熵视图消融 | `configs/evaluation/tpt_selection_fraction_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_selection_fraction_ablation/` |
-| 一步 LR 消融 | `configs/evaluation/tpt_lr_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_lr_ablation/` |
-| LR × Steps 消融 | `configs/evaluation/tpt_lr_steps_ablation.yaml` | `scripts/evaluate_tpt.py` | `runs/tpt_lr_steps_ablation/` |
-| Data-wise LR TPT | `configs/evaluation/datawise_lr_tpt.yaml` | `scripts/evaluate_datawise_lr_tpt.py` | `runs/datawise_lr_tpt/` |
-| TPT 状态转移统计 | `configs/evaluation/tpt_transition_stats.yaml` | `scripts/evaluate_tpt_transition_stats.py` | `runs/tpt_transition_stats/` |
+| Pure CLIP zero-shot | `configs/evaluation/1_clip_zero_shot.yaml` | `clip-evaluate` | `runs/1_clip_zero_shot/` |
+| 标准 TPT | `configs/evaluation/2_tpt_classification.yaml` | `scripts/2_evaluate_tpt.py` | `runs/2_tpt_classification/` |
+| 低熵视图消融 | `configs/evaluation/3_tpt_selection_fraction_ablation.yaml` | `scripts/3_evaluate_tpt_selection_ablation.py` | `runs/3_tpt_selection_fraction_ablation/` |
+| 一步 LR 消融 | `configs/evaluation/4_tpt_lr_ablation.yaml` | `scripts/4_evaluate_tpt_lr_ablation.py` | `runs/4_tpt_lr_ablation/` |
+| LR × Steps 消融 | `configs/evaluation/5_tpt_lr_steps_ablation.yaml` | `scripts/5_evaluate_tpt_lr_steps_ablation.py` | `runs/5_tpt_lr_steps_ablation/` |
+| Data-wise LR TPT | `configs/evaluation/6_datawise_lr_tpt.yaml` | `scripts/6_evaluate_datawise_lr_tpt.py` | `runs/6_datawise_lr_tpt/` |
+| TPT 状态转移统计 | `configs/evaluation/7_tpt_transition_stats.yaml` | `scripts/7_evaluate_tpt_transition_stats.py` | `runs/7_tpt_transition_stats/` |
+| TPT 梯度对齐 | `configs/evaluation/8_tpt_gradient_alignment.yaml` | `scripts/8_evaluate_tpt_gradient_alignment.py` | `runs/8_tpt_gradient_alignment/` |
 
 Pure CLIP zero-shot（安装后提供 `clip-evaluate` 命令）：
 
 ```bash
 clip-evaluate \
-  --config configs/evaluation/clip_zero_shot.yaml
+  --config configs/evaluation/1_clip_zero_shot.yaml
 ```
 
-仓库脚本 `python scripts/evaluate_clip_zeroshot.py ...` 调用同一实现，参数完全一致。
+仓库脚本 `python scripts/1_evaluate_clip_zeroshot.py ...` 调用同一实现，参数完全一致。
 
 标准 TPT（64 views、最低熵 10%、Top-1 至 Top-5）：
 
 ```bash
-python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_classification.yaml
+python scripts/2_evaluate_tpt.py \
+  --config configs/evaluation/2_tpt_classification.yaml
 ```
 
 低熵视图 count 消融、Only origin、CLIP zero-shot 基线和自动绘图：
 
 ```bash
-python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_selection_fraction_ablation.yaml
+python scripts/3_evaluate_tpt_selection_ablation.py \
+  --config configs/evaluation/3_tpt_selection_fraction_ablation.yaml
 ```
 
-一步 TPT 的 learning-rate 消融：
+一步 TPT 的 learning-rate 消融（10 个 LR，`weight_decay: 0.01`）：
 
 ```bash
-python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_lr_ablation.yaml
+python scripts/4_evaluate_tpt_lr_ablation.py \
+  --config configs/evaluation/4_tpt_lr_ablation.yaml
 ```
 
-Learning rate 与更新步数的二维消融（当前 `weight_decay: 0.05`）：
+Learning rate 与更新步数的二维消融（7 个 LR × 10 个步数，`weight_decay: 0.05`）：
 
 ```bash
-python scripts/evaluate_tpt.py \
-  --config configs/evaluation/tpt_lr_steps_ablation.yaml
+python scripts/5_evaluate_tpt_lr_steps_ablation.py \
+  --config configs/evaluation/5_tpt_lr_steps_ablation.yaml
 ```
 
 逐样本遍历候选 LR、按 post-update entropy 选择并绘制 LR 比例与正确率：
 
 ```bash
-python scripts/evaluate_datawise_lr_tpt.py \
-  --config configs/evaluation/datawise_lr_tpt.yaml
+python scripts/6_evaluate_datawise_lr_tpt.py \
+  --config configs/evaluation/6_datawise_lr_tpt.yaml
 ```
 
-Data-wise LR TPT 将一个完整任务定义为 `seed × model × dataset × selection setting × step setting`，每张 GPU 同时最多运行一个完整任务。每个 seed 会生成独立 summary 和图表，顶层 summary 同时保存逐 seed 结果与跨 seed 平均值；完整说明见 [Data-wise LR TPT](guide/datawise_lr_tpt.md)。
+Data-wise LR TPT 将一个完整任务定义为 `seed × model × dataset × selection setting × step setting`，每张 GPU 同时最多运行一个完整任务。每个 seed 会生成独立 summary 和图表，顶层 summary 同时保存逐 seed 结果与跨 seed 平均值；完整说明见 [Data-wise LR TPT](guide/6_datawise_lr_tpt.md)。
 
 统计 TPT 前后的正确/错误转移，以及 entropy 与真实标签 cross-entropy 的升降组合：
 
 ```bash
-python scripts/evaluate_tpt_transition_stats.py \
-  --config configs/evaluation/tpt_transition_stats.yaml
+python scripts/7_evaluate_tpt_transition_stats.py \
+  --config configs/evaluation/7_tpt_transition_stats.yaml
 ```
 
-默认运行 ImageNet-A、ViT-B/16、seed 123 和 LR 0.003，并自动生成两张四分类柱状图。多数据集、多 LR 和多 seed 会展开为独立完整任务并轮询分配到配置的 GPU；协议、smoke test 和输出说明见 [TPT 状态转移统计](guide/tpt_transition_stats.md)。
+默认运行 ImageNet-A、ViT-B/16、seed 123 和 LR 0.003，并自动生成两张四分类柱状图。多数据集、多 LR 和多 seed 会展开为独立完整任务并轮询分配到配置的 GPU；协议、smoke test 和输出说明见 [TPT 状态转移统计](guide/7_tpt_transition_stats.md)。
+
+比较 one-step TPT entropy 与监督 cross-entropy 的 raw gradient 和 AdamW 实际参数更新：
+
+```bash
+python scripts/8_evaluate_tpt_gradient_alignment.py \
+  --config configs/evaluation/8_tpt_gradient_alignment.yaml
+```
+
+默认设置与状态转移统计一致，单任务运行 ImageNet-A、ViT-B/16、seed 123、LR 0.003；分别导出 raw/update norm、cosine、内积分布及按初始正确/错误分组的统计和图。实验定义、smoke test 与结果解释见 [TPT 梯度对齐](guide/8_tpt_gradient_alignment.md)。
 
 低熵视图消融的结果位于：
 
 ```text
-runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
+runs/3_tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 ```
 
-图中横轴依次包含 `CLIP zero-shot`、`Only origin` 和 count/fraction 筛选设置。详细配置见[TPT Selection Fraction 消融](guide/tpt_selection_fraction_ablation.md)。
+图中横轴依次包含 `CLIP zero-shot`、`Only origin` 和 count/fraction 筛选设置。详细配置见[TPT Selection Fraction 消融](guide/3_tpt_selection_fraction_ablation.md)。
 
 ## 评测协议
 
@@ -178,15 +188,16 @@ runs/tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 
 ## 文档
 
-- [准备工作](guide/preparation.md)：环境、数据、权重和数据可视化。
-- [Pure CLIP Zero-shot](guide/clip_test.md)：协议、smoke test、正式运行和输出。
-- [TPT 图像分类](guide/tpt_classification.md)：标准 TPT、参数和结果结构。
-- [TPT Quick Demo](guide/tpt_quick_demo.md)：用较小任务逐步验证多 GPU TPT。
-- [TPT Selection Fraction 消融](guide/tpt_selection_fraction_ablation.md)：fraction/count、Only origin、Top-k、zero-shot 类别和重绘。
-- [TPT Learning-rate 消融](guide/tpt_lr_ablation.md)：一步 TPT 的 10 个学习率、自动绘图和结果边界。
-- [TPT LR × Steps 消融](guide/tpt_lr_steps_ablation.md)：二维扫描、weight decay 语义、最佳步数和热力图。
-- [Data-wise LR TPT](guide/datawise_lr_tpt.md)：逐样本 entropy LR 选择、多步轨迹、逐样本记录、LR 比例与正确率绘图。
-- [TPT 状态转移统计](guide/tpt_transition_stats.md)：一步 TPT 前后正确性转移、entropy/监督 CE 转移、多 GPU 调度和柱状图重绘。
+- [准备工作](guide/0_preparation.md)：环境、数据、权重和数据可视化。
+- [Pure CLIP Zero-shot](guide/1_clip_zero_test.md)：协议、smoke test、正式运行和输出。
+- [TPT 图像分类](guide/2_tpt_classification.md)：标准 TPT、参数和结果结构。
+- [TPT Quick Demo](guide/2_tpt_quick_demo.md)：用较小任务逐步验证多 GPU TPT。
+- [TPT Selection Fraction 消融](guide/3_tpt_selection_fraction_ablation.md)：fraction/count、Only origin、Top-k、zero-shot 类别和重绘。
+- [TPT Learning-rate 消融](guide/4_tpt_lr_ablation.md)：固定一步更新，单独扫描 LR 并生成准确率曲线和柱状图。
+- [TPT LR × Steps 消融](guide/5_tpt_lr_steps_ablation.md)：联合扫描 LR 与更新步数，生成逐 LR 曲线、最佳步数和热力图。
+- [Data-wise LR TPT](guide/6_datawise_lr_tpt.md)：逐样本 entropy LR 选择、多步轨迹、逐样本记录、LR 比例与正确率绘图。
+- [TPT 状态转移统计](guide/7_tpt_transition_stats.md)：一步 TPT 前后正确性转移、entropy/监督 CE 转移、多 GPU 调度和柱状图重绘。
+- [TPT 梯度对齐](guide/8_tpt_gradient_alignment.md)：raw gradient 与 AdamW 实际 update 的 T/C 对齐、分组统计和分布图。
 - [GitHub 同步](guide/github_sync.md)：只同步代码、配置和文档。
 
 ## 目录

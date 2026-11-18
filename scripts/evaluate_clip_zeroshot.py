@@ -48,7 +48,7 @@ DEFAULTS = {
     "class_index": "configs/visualization/imagenet_class_index.json",
     "class_names": "configs/evaluation/imagenet_classes_tpt.json",
     "model_root": "models",
-    "output_root": "runs/clip_zero_shot",
+    "output_root": "runs/1_clip_zero_shot",
     "datasets": list(DATASET_NAMES),
     "models": list(MODEL_PATHS),
     "batch_size": 256,
@@ -141,7 +141,7 @@ def resolve_path(value: str | Path) -> Path:
 def parse_args() -> tuple[argparse.Namespace, Path]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path,
-                        default=PROJECT_ROOT / "configs/evaluation/clip_zero_shot.yaml")
+                        default=PROJECT_ROOT / "configs/evaluation/1_clip_zero_shot.yaml")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--class-index", type=Path)
     parser.add_argument("--class-names", type=Path)

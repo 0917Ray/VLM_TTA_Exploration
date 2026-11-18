@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib
 import json
 import logging
 import math
@@ -47,7 +48,7 @@ DEFAULTS = {
     "class_index": "configs/visualization/imagenet_class_index.json",
     "class_names": "configs/evaluation/imagenet_classes_tpt.json",
     "model_root": "models",
-    "output_root": "runs/tpt_classification",
+    "output_root": "runs/2_tpt_classification",
     "idea": None,
     "datasets": list(DATASET_NAMES),
     "models": ["RN50"],
@@ -265,9 +266,15 @@ class TPTClassifier(nn.Module):
         return self.logit_scale.exp() * image_features @ text_features.t()
 
 
-def select_confident_samples(logits: torch.Tensor, fraction: float) -> tuple[torch.Tensor, torch.Tensor]:
+def select_confident_samples(logits: torch.Tensor, fraction: float | None = None,
+                             count: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    if (fraction is None) == (count is None):
+        raise ValueError("Provide exactly one of fraction or count")
     entropy = -(logits.softmax(dim=1) * logits.log_softmax(dim=1)).sum(dim=1)
-    count = max(1, int(logits.shape[0] * fraction))
+    if count is None:
+        count = max(1, int(logits.shape[0] * fraction))
+    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= logits.shape[0]:
+        raise ValueError(f"count must be between 1 and {logits.shape[0]}")
     indices = torch.argsort(entropy)[:count]
     return logits[indices], indices
 
@@ -283,8 +290,8 @@ def average_entropy(logits: torch.Tensor) -> torch.Tensor:
 
 def tune_prompt(model: TPTClassifier, views: torch.Tensor, optimizer, scaler,
                 selection_fraction: float, tta_steps: int, device: torch.device):
-    selected_indices = None
     initial_canonical_logits = None
+    selected_indices = None
     for _ in range(tta_steps):
         with torch.autocast(device_type=device.type, dtype=torch.float16,
                             enabled=device.type == "cuda"):
@@ -327,7 +334,7 @@ def resolve_path(value: str | Path) -> Path:
 def parse_args() -> tuple[argparse.Namespace, Path]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path,
-                        default=PROJECT_ROOT / "configs/evaluation/tpt_classification.yaml")
+                        default=PROJECT_ROOT / "configs/evaluation/2_tpt_classification.yaml")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--class-index", type=Path)
     parser.add_argument("--class-names", type=Path)
@@ -1231,9 +1238,9 @@ def main():
     chart_data_path = write_selection_fraction_results(averages, summary_root)
     if args.plot["enabled"]:
         if args.plot["kind"] == "lr_steps":
-            from plot_tpt_lr_steps_ablation import generate_plots
+            generate_plots = importlib.import_module("5_plot_tpt_lr_steps_ablation").generate_plots
         else:
-            from plot_tpt_selection_ablation import generate_plots
+            generate_plots = importlib.import_module("3_plot_tpt_selection_ablation").generate_plots
 
         plot_paths = generate_plots(
             args.plot["config"], data_path=chart_data_path,

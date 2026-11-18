@@ -1,0 +1,36 @@
+data_root: data/raw
+class_index: configs/visualization/imagenet_class_index.json
+class_names: configs/evaluation/imagenet_classes_tpt.json
+model_root: models
+output_root: runs/7_tpt_transition_stats
+idea: null
+run_name: null
+
+datasets:
+  - imagenet-a
+models:
+  - ViT-B/16
+devices:
+  - cuda:0
+  - cuda:1
+  - cuda:2
+  - cuda:3
+seeds:
+  - 123
+learning_rates:
+  - 0.003
+
+num_workers: 2
+views: 64
+selection_fraction: 0.1
+weight_decay: 0.01
+prompt_init: "a photo of a"
+resolution: 224
+print_frequency: 100
+limit: null
+loss_tolerance: 1.0e-8
+log_file: run.log
+
+plot:
+  enabled: true
+  config: configs/visualization/7_tpt_transition_stats.yaml

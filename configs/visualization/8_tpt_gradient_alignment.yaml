@@ -1,0 +1,37 @@
+enabled: true
+data:
+  evaluation_config: ../evaluation/8_tpt_gradient_alignment.yaml
+  distribution: null
+
+figure:
+  figsize: [15.0, 10.0]
+  dpi: 300
+  transparent: false
+
+histogram:
+  bins: 40
+  density: true
+  alpha: 0.45
+  linewidth: 1.7
+  grid: true
+  grid_color: "#D8DCE2"
+  grid_alpha: 0.75
+  x_quantile_limits: [0.005, 0.995]
+
+colors:
+  T: "#5B7CA7"
+  C: "#BA6580"
+
+spines:
+  linewidth: 2.0
+  color: "#3A3D42"
+
+text:
+  title_prefix: "TPT Gradient Alignment"
+  xlabel_norm: "L2 norm"
+  xlabel_cosine: "Cosine similarity"
+  xlabel_dot: "Inner product"
+  ylabel: "Density"
+
+output:
+  pdf: true

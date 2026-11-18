@@ -1,0 +1,13 @@
+"""Run the view-selection ablation using the shared TPT evaluator."""
+
+import sys
+from pathlib import Path
+
+from evaluate_tpt import main
+
+
+if __name__ == "__main__":
+    if not any(arg == "--config" or arg.startswith("--config=") for arg in sys.argv[1:]):
+        config = Path(__file__).resolve().parents[1] / "configs/evaluation/3_tpt_selection_fraction_ablation.yaml"
+        sys.argv[1:1] = ["--config", str(config)]
+    main()
