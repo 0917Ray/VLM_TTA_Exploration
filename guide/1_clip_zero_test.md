@@ -40,15 +40,16 @@ python scripts/1_evaluate_clip_zeroshot.py \
   --models ViT-B/16 --datasets imagenet-a \
   --devices cuda:0 --seeds 42 \
   --batch-size 4 --num-workers 0 --limit 8 \
+  --idea smoke \
   --output-root /tmp/clip_zero_shot_smoke
 ```
 
 预期结果：
-- 生成 `/tmp/clip_zero_shot_smoke/results.csv` 和 `average_results.md`.
+- 生成 `/tmp/clip_zero_shot_smoke/idea_smoke/results.csv` 和同目录下的 `average_results.md`。
 
 ## 3. 正式评测
 
-正式评测的范围和参数由 `configs/evaluation/1_clip_zero_shot.yaml` 定义，需要修改参数则直接在其中修改即可.
+正式评测的范围和参数由 `configs/evaluation/1_clip_zero_shot.yaml` 定义，需要修改参数则直接在其中修改即可。配置中的 `idea: null` 沿用原有根目录；例如改成 `idea: baseline_recheck`，本次结果就写入 `runs/1_clip_zero_shot/idea_baseline_recheck/`。
 
 正式评测：
 
@@ -67,6 +68,20 @@ python scripts/1_evaluate_clip_zeroshot.py \
   --datasets imagenet-a imagenet-r
 ```
 
+也可以不改 YAML，临时用 CLI 指定新的 `idea`：
+
+```bash
+python scripts/1_evaluate_clip_zeroshot.py \
+  --config configs/evaluation/1_clip_zero_shot.yaml \
+  --idea baseline_recheck
+```
+
+运行成功后查看本次 Markdown 汇总：
+
+```bash
+cat runs/1_clip_zero_shot/idea_baseline_recheck/average_results.md
+```
+
 
 ## 配置说明
 
@@ -79,6 +94,7 @@ python scripts/1_evaluate_clip_zeroshot.py \
 | `class_names` | 构造 prompt 的类别名称文件。 |
 | `model_root` | CLIP checkpoint 所在目录。 |
 | `output_root` | 结果和日志目录。 |
+| `idea` | 可选实验名；非空时在 `output_root` 下追加 `idea_<name>/`。可在 YAML 中设置，也可用 `--idea` 临时覆盖。 |
 | `datasets` | 评测数据集列表；支持 `imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch`。 |
 | `models` | 评测模型列表；支持 `RN50`、`ViT-B/16`。 |
 | `batch_size` | 每个并行任务的图像 batch size；显存不足时降低。 |
@@ -94,7 +110,7 @@ python scripts/1_evaluate_clip_zeroshot.py \
 ## 输出
 
 ```text
-<output_root>/
+<run_root>/
   results.csv
   results.json
   average_results.csv
@@ -103,8 +119,12 @@ python scripts/1_evaluate_clip_zeroshot.py \
   run_<timestamp>.log
 ```
 
+`<run_root>` 为配置中的 `output_root`；当 `idea` 非空时，改为 `<output_root>/idea_<name>/`。例如 `idea: baseline_recheck` 对应 `runs/1_clip_zero_shot/idea_baseline_recheck/`。
+
 - `results.*`：每个模型、数据集、seed 的样本数、正确数、Top-1、候选类别数和设备。
 - `average_results.*`：按模型和数据集汇总 seed 均值、总体标准差、最小值和最大值。
 - `average_results.md`：可直接阅读的结果表。
 
-任务完成后会持续更新 `results.*`；全部任务完成后生成平均汇总。重新使用同一 `output_root` 会覆盖结果文件，但日志文件带时间戳，不会覆盖旧日志。
+CSV/JSON 中的 Top-1 accuracy 是 `0` 到 `1` 的比例；Markdown 将其乘以 100 显示为百分比，例如 `0.5147` 对应 `51.4700%`。
+
+每个已完成的任务会更新 `results.*`；全部任务完成后才生成 `average_results.*`。重新使用同一 `idea` 时，开始前先清除该目录中的旧结果和平均汇总，随后写入本次结果，包括 `average_results.md`；日志文件带时间戳并保留。需要保留前一次结果时，请改用新的 `idea`。`idea: null` 时保持原有的 `<output_root>/` 路径。

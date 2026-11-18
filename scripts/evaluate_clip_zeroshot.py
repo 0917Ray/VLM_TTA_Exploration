@@ -39,7 +39,7 @@ MODEL_PATHS = {
 MODEL_FILES = {name: path.name for name, path in MODEL_PATHS.items()}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".jpeg"}
 CONFIG_KEYS = {
-    "data_root", "class_index", "class_names", "model_root", "output_root", "datasets", "models",
+    "data_root", "class_index", "class_names", "model_root", "output_root", "idea", "datasets", "models",
     "batch_size", "num_workers", "devices", "device", "prompt_template", "seeds", "seed",
     "limit", "log_file",
 }
@@ -49,6 +49,7 @@ DEFAULTS = {
     "class_names": "configs/evaluation/imagenet_classes_tpt.json",
     "model_root": "models",
     "output_root": "runs/1_clip_zero_shot",
+    "idea": None,
     "datasets": list(DATASET_NAMES),
     "models": list(MODEL_PATHS),
     "batch_size": 256,
@@ -73,6 +74,7 @@ class Result:
     prompt_template: str
     seed: int
     device: str
+    idea: str | None
 
 
 class VariantDataset(Dataset):
@@ -147,6 +149,7 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
     parser.add_argument("--class-names", type=Path)
     parser.add_argument("--model-root", type=Path)
     parser.add_argument("--output-root", type=Path)
+    parser.add_argument("--idea")
     parser.add_argument("--datasets", nargs="+")
     parser.add_argument("--models", nargs="+")
     parser.add_argument("--batch-size", type=int)
@@ -183,6 +186,16 @@ def parse_args() -> tuple[argparse.Namespace, Path]:
         values["seeds"] = [cli.seed]
     for key in ("data_root", "class_index", "class_names", "model_root", "output_root"):
         values[key] = resolve_path(values[key])
+    idea = values["idea"]
+    if idea is not None and not isinstance(idea, str):
+        raise SystemExit("idea must be a string or null")
+    if isinstance(idea, str):
+        idea = "_".join(idea.split())
+        if idea in {".", ".."} or any(character in idea for character in ("/", "\\", "\0")):
+            raise SystemExit("idea must be a single directory-safe name without path separators")
+    values["idea"] = idea or None
+    if values["idea"] is not None:
+        values["output_root"] = values["output_root"] / f"idea_{values['idea']}"
     if not values["datasets"] or any(name not in DATASET_NAMES for name in values["datasets"]):
         raise SystemExit(f"datasets must contain only: {', '.join(DATASET_NAMES)}")
     if not values["models"] or any(name not in MODEL_PATHS for name in values["models"]):
@@ -246,6 +259,16 @@ def setup_logging(output_root: Path, log_file: str) -> logging.Logger:
     )
     logger.info("run log: %s", log_path)
     return logger
+
+
+def clear_previous_outputs(output_root: Path) -> None:
+    """Do not expose a previous run's results while replacing the same idea."""
+    output_root.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "results.json", "results.csv", "average_results.json", "average_results.csv",
+        "average_results.md",
+    ):
+        (output_root / name).unlink(missing_ok=True)
 
 
 def load_class_index(path: Path) -> dict[str, list[str]]:
@@ -347,6 +370,7 @@ def average_results(results: list[Result], models: list[str], datasets: list[str
                 continue
             accuracies = [result.top1_accuracy for result in group]
             averages.append({
+                "idea": group[0].idea,
                 "model": model_name,
                 "dataset": dataset_name,
                 "num_seeds": len(group),
@@ -376,11 +400,17 @@ def write_average_results(averages: list[dict], output_root: Path,
     lines = [
         "# Average Top-1 Accuracy",
         "",
+    ]
+    if averages[0].get("idea") is not None:
+        lines.extend([f"Idea: `{averages[0]['idea']}`", ""])
+    lines.extend([
+        "Seeds: " + ", ".join(map(str, averages[0]["seeds"])),
+        "",
         "Values are mean +/- population standard deviation across seeds.",
         "",
         "| Model | " + " | ".join(datasets) + " |",
         "| --- | " + " | ".join("---:" for _ in datasets) + " |",
-    ]
+    ])
     for model_name in models:
         cells = []
         for dataset_name in datasets:
@@ -430,6 +460,7 @@ def evaluate_job(clip_module, args, class_index, names, model_name: str, dataset
                 prompt_template=args.prompt_template,
                 seed=seed,
                 device=str(device),
+                idea=args.idea,
             )
             job_results.append(result)
             print(f"[RESULT] {device} seed={seed} {model_name} {dataset_name}: "
@@ -459,6 +490,7 @@ def run_device_queue(clip_module, args, class_index, names, device_name: str,
 
 def main():
     args, config_path = parse_args()
+    clear_previous_outputs(args.output_root)
     logger = setup_logging(args.output_root, args.log_file)
     logger.info("config: %s", config_path)
     logger.info("resolved arguments: %s", vars(args))

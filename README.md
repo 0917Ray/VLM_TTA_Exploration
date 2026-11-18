@@ -97,7 +97,7 @@ python scripts/2_evaluate_tpt.py \
 
 | 工作流 | 配置 | 执行入口 | 输出根目录 |
 | --- | --- | --- | --- |
-| Pure CLIP zero-shot | `configs/evaluation/1_clip_zero_shot.yaml` | `clip-evaluate` | `runs/1_clip_zero_shot/` |
+| Pure CLIP zero-shot | `configs/evaluation/1_clip_zero_shot.yaml` | `clip-evaluate` | `runs/1_clip_zero_shot/`；设置 `idea` 时追加 `idea_<name>/` |
 | 标准 TPT | `configs/evaluation/2_tpt_classification.yaml` | `scripts/2_evaluate_tpt.py` | `runs/2_tpt_classification/` |
 | 低熵视图消融 | `configs/evaluation/3_tpt_selection_fraction_ablation.yaml` | `scripts/3_evaluate_tpt_selection_ablation.py` | `runs/3_tpt_selection_fraction_ablation/` |
 | 一步 LR 消融 | `configs/evaluation/4_tpt_lr_ablation.yaml` | `scripts/4_evaluate_tpt_lr_ablation.py` | `runs/4_tpt_lr_ablation/` |
@@ -114,6 +114,7 @@ clip-evaluate \
 ```
 
 仓库脚本 `python scripts/1_evaluate_clip_zeroshot.py ...` 调用同一实现，参数完全一致。
+Zero-shot 可在 YAML 中设置 `idea`，或临时传入 `--idea <name>`；同名 `idea` 重跑会替换该目录的结果文件，详细规则见 [Pure CLIP Zero-shot](guide/1_clip_zero_test.md)。
 
 标准 TPT（64 views、最低熵 10%、Top-1 至 Top-5）：
 
@@ -188,12 +189,12 @@ runs/3_tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 
 ## 已记录的 Zero-shot Top-1
 
-单模板 `a photo of a {}.` 的结果，完整记录保存在本地 `runs/1_clip_zero_shot/average_results.md`：
+下表是 2026-11-18 使用单模板 `a photo of a {}.`、seed `44`、两个模型与四个数据集完成评测时的结果快照。`idea: null` 的运行写入 `runs/1_clip_zero_shot/average_results.md`；设置 `idea: <name>` 后，当前结果位于 `runs/1_clip_zero_shot/idea_<name>/average_results.md`。重跑不会自动改写下表，请以对应运行目录中的 CSV、JSON 和 Markdown 为准。
 
 | 模型 | ImageNet-V2 | ImageNet-A | ImageNet-R | ImageNet-Sketch |
 | --- | ---: | ---: | ---: | ---: |
-| CLIP-RN50 | 51.4600% | 21.8533% | 56.1167% | 33.3589% |
-| CLIP-ViT-B/16 | 60.8800% | 47.8267% | 73.9833% | 46.1023% |
+| CLIP-RN50 | 51.4700% | 21.8800% | 56.1533% | 33.3608% |
+| CLIP-ViT-B/16 | 60.8900% | 47.8400% | 73.9867% | 46.0885% |
 
 ## 已验证的 Data-wise LR TPT 结果
 
