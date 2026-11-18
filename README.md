@@ -1,6 +1,6 @@
 # VLM CLIP Adaptation Experiments
 
-本仓库复现 OpenAI CLIP zero-shot 分类和 Test-Time Prompt Tuning（TPT），并分析低熵视图筛选、学习率、更新步数以及逐样本学习率选择对结果的影响。
+本仓库以 OpenAI CLIP RN50 和 ViT-B/16 为基础，在四个 ImageNet 变体上评测 zero-shot 与标准 TPT，并研究低熵视图选择、学习率、更新步数、逐样本学习率选择、TPT 状态转移及 entropy 与监督 CE 的梯度对齐。实验工作流和结果见下文。
 
 ## 从零开始
 
@@ -33,7 +33,16 @@ clip-evaluate --help
 
 ### 2. 准备数据和权重
 
-四个数据集根目录必须直接包含类别目录：
+准备四个数据集；下表为当前本地数据的规模（大小为解压后约值）：
+
+| 数据集 | 简介 | 类别数 | 图像数 | 文件大小 |
+| --- | --- | ---: | ---: | ---: |
+| ImageNet-V2（MatchedFrequency） | 重新采集的 ImageNet 测试集 | 1,000 | 10,000 | 约 1.24 GB |
+| ImageNet-A | 易使 ImageNet 分类器误判的自然图像 | 200 | 7,500 | 约 0.68 GB |
+| ImageNet-R | 艺术创作、卡通等非照片风格图像 | 200 | 30,000 | 约 2.17 GB |
+| ImageNet-Sketch | 对应 ImageNet 类别的素描图像 | 1,000 | 50,889 | 约 8.17 GB |
+
+数据集根目录必须直接包含类别目录：
 
 ```text
 data/raw/imagenetv2/<0-999>/...
@@ -42,7 +51,13 @@ data/raw/imagenet-r/<wnid>/...
 data/raw/imagenet-sketch/<wnid>/...
 ```
 
-下载与解压命令见[准备工作](guide/0_preparation.md#2-数据集准备)。下载 CLIP 权重：
+下载与解压命令见[准备工作](guide/0_preparation.md#2-数据集准备)。可生成每个数据集随机 10 个类别、每类 1 张图像的标注拼图：
+
+```bash
+python scripts/0_visualize_datasets.py --config configs/visualization/0_datasets.yaml
+```
+
+拼图输出到 `runs/0_dataset_visualizations/`。下载 CLIP 权重：
 
 ```bash
 mkdir -p models
@@ -54,7 +69,12 @@ for name in ("RN50", "ViT-B/16"):
 PY
 ```
 
-最终应存在 `models/RN50.pt` 和 `models/ViT-B-16.pt`。
+| 模型 | 图像编码器 | 本地权重 | 文件大小 |
+| --- | --- | --- | ---: |
+| CLIP RN50 | ResNet-50 | `models/RN50.pt` | 约 255.83 MB |
+| CLIP ViT-B/16 | ViT-Base，16 × 16 patch | `models/ViT-B-16.pt` | 约 350.84 MB |
+
+后续评测从上述本地权重加载模型，无需重新下载。
 
 ### 3. 运行 smoke test
 
@@ -168,7 +188,7 @@ runs/3_tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 
 ## 已记录的 Zero-shot Top-1
 
-单模板 `a photo of a {}.` 的结果：
+单模板 `a photo of a {}.` 的结果，完整记录保存在本地 `runs/1_clip_zero_shot/average_results.md`：
 
 | 模型 | ImageNet-V2 | ImageNet-A | ImageNet-R | ImageNet-Sketch |
 | --- | ---: | ---: | ---: | ---: |
@@ -185,6 +205,16 @@ runs/3_tpt_selection_fraction_ablation/idea_count_ablation_zero_shot/summary/
 | Data-wise LR TPT | 55.5000% | 81.1333% | 2 | sample standard deviation：Top-1 `0.2734 pp`，Top-5 `0.0754 pp` |
 
 该结果只描述上述已完成协议，不代表其他模型、数据集、selection 设置或多步设置。测试标签不参与 LR 选择。
+
+## 已完成的梯度对齐结果
+
+在 ImageNet-A、ViT-B/16、seed 123、LR 0.003 的 7,500 张图像上，比较 entropy 与监督 CE 的 raw gradient 及一步 AdamW 参数更新。下表为 cosine 均值；负值比例表示 cosine 小于 0 的样本占比。完整统计保存在本地 `runs/8_tpt_gradient_alignment/run_20261116_102743_098362/summary/summary.md`。
+
+| 更新前分组 | 样本数 | Raw cosine | Raw 负值比例 | Update cosine | Update 负值比例 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 全部 | 7,500 | 0.4348 | 30.61% | 0.4150 | 30.44% |
+| 预测正确 | 3,586 | 0.8681 | 5.02% | 0.7938 | 4.94% |
+| 预测错误 | 3,914 | 0.0378 | 54.06% | 0.0678 | 53.81% |
 
 ## 文档
 
