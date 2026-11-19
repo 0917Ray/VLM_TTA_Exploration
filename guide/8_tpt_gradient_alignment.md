@@ -99,7 +99,7 @@
 
 由于 T 和 C 两个向量都采用同一“参数变化”符号，若另定义下降方向为 `-u_T` 和 `-u_C`，二者之间的 cosine 和内积数值不变。实现中仍应固定保存 `u = theta_after - theta_before`，避免把符号约定混入不同实验。
 
-对 norm 只统计非负的尺度指标；“负值比例”只适用于 raw/update cosine 和 dot。每个统计值都应同时保存有效样本数和非有限值数量。
+norm 是非负的尺度指标；cosine 和 dot 可正可负。所有 8 个指标都保存符号与近零计数，以及有效样本数和非有限值数量。
 
 ## 4. 分布、分层和汇总统计
 
@@ -110,7 +110,7 @@
 - raw gradient：`raw_norm_T` 与 `raw_norm_C` 的 norm 分布、`raw_cosine` 分布、`raw_dot` 分布；
 - optimizer update：`update_norm_T` 与 `update_norm_C` 的 norm 分布、`update_cosine` 分布、`update_dot` 分布。
 
-建议每种设定使用一个三联图：左侧叠加 T/C norm 分布，中间 cosine 分布，右侧 dot 分布。norm 可以使用 log 横轴或明确的稳健 x 轴范围；cosine 图应标出 `0` 参考线，dot 图也应标出 `0` 参考线。应优先保存直方图的固定 bins 和完整数据 CSV，避免只保存图片后无法复现。
+每种设定保存一张 `all`、`initial_correct`、`initial_wrong` 为三行且 norm、cosine、dot 为三列的九宫格图；另存三张横向三联图，分别比较三个群体的 norm、cosine、dot。norm 图中 T 用绿色 `#4F7C65`、C 用红色 `#A75B73`，并在绘图区上方解释 T 为 entropy loss、C 为监督 CE；cosine 和 dot 的正值区域用绿、负值区域用红，并在零线两侧的绘图区上方分别标出正负样本占比。占比以该群体的全部有效样本为分母，与 `summary.md` 的正负比例一致。文字标注放在绘图区外，避免遮挡柱形；图中标出 `0` 参考线。直方图参数和完整分布 CSV 随图保存，以便重绘。
 
 ### 4.2 按初始预测正确/错误分层
 
@@ -140,14 +140,17 @@ update_cosine, update_dot
 - `IQR = Q3 - Q1`；
 - `valid_count` 和 `nonfinite_count`。
 
-对 `raw_cosine`、`raw_dot`、`update_cosine`、`update_dot` 额外保存：
+所有 8 个指标额外保存：
 
 ```text
+positive_count = count(metric > 0)
 negative_count = count(metric < 0)
-negative_ratio = negative_count / valid_count
+exact_zero_count = count(metric == 0)
+near_zero_count = count(abs(metric) < 0.0001)
+各 ratio = 对应 count / valid_count
 ```
 
-严格等于 `0` 的值不计入负值比例。若需要消除浮点噪声影响，可另加 `near_zero_ratio`，但不能未经说明把近零值并入负值比例。
+严格等于 `0` 的值既不计入正值也不计入负值。近零统计与正负统计重叠，`summary.md` 明确注明这一点；各列不能直接相加。对于 norm，负值计数应为 0。
 
 多 seed、多数据集和多 LR 时，先保存每个 `model × dataset × learning_rate × seed` 任务的样本级记录和汇总，再对同一 model/dataset/LR 的 seed 结果进行汇总。默认建议保留两种视图：
 
@@ -156,11 +159,11 @@ negative_ratio = negative_count / valid_count
 
 不能把不同参数维度的梯度向量跨样本平均后再计算 cosine；alignment 必须先按样本计算，再汇总标量。
 
-## 5. 默认实验配置
+## 5. 实验配置
 
-默认配置应与 [状态转移统计](7_tpt_transition_stats.md) 保持一致，并且本次默认只展开一个任务：
+脚本内置默认值与 [状态转移统计](7_tpt_transition_stats.md) 保持一致，只展开一个任务：
 
-| 字段 | 默认值 |
+| 字段 | 脚本内置默认值 |
 | --- | --- |
 | dataset | `imagenet-a` |
 | model | `ViT-B/16` |
@@ -173,7 +176,7 @@ negative_ratio = negative_count / valid_count
 | weight decay | `0.01` |
 | prompt init | `a photo of a` |
 
-默认网格只有一个完整任务，因此虽配置了四张 GPU，任务只会分配到 `cuda:0`。指定多数据集、LR 或 seed 后，再按任务轮询分配其他 devices。
+当前 `configs/evaluation/8_tpt_gradient_alignment.yaml` 覆盖了脚本默认数据集，指定 `imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch` 和 `idea: Four_Datasets`。使用该 YAML 的命令会展开四个完整任务，依次分配到 `cuda:0` 至 `cuda:3`。指定更多 LR 或 seed 后，任务继续按 devices 轮询分配。
 
 多任务定义为：
 
@@ -208,7 +211,7 @@ Smoke test 至少应验证：
 - 统计表的 mean、median、sample standard deviation、IQR 和负值比例可由保存的 sample metrics 独立重算；
 - 绘图脚本只读取保存的标量 CSV，不重新加载模型或数据集。
 
-Smoke test 的数值不用于正式结论。正式默认运行再将 `limit` 恢复为 `null`，其他配置保持一致。
+Smoke test 的数值不用于正式结论。正式运行使用当前 YAML 中的 `limit: null`，并取消 smoke test 的单数据集、少视图等 CLI 覆盖。
 
 Smoke test 命令：
 
@@ -222,7 +225,7 @@ python scripts/8_evaluate_tpt_gradient_alignment.py \
   --output-root /tmp/tpt_gradient_alignment_smoke
 ```
 
-默认全量命令：
+当前 YAML 的全量命令：
 
 ```bash
 python scripts/8_evaluate_tpt_gradient_alignment.py \
@@ -260,6 +263,15 @@ runs/8_tpt_gradient_alignment/run_<id>/
 ```
 
 每个 summary 中的 `gradient_summary` 按 model、dataset、learning rate 和 `all`/正确性分组列出统计；`distribution_data.csv` 保存图表使用的逐样本长表。图表再按 model/dataset/LR 写入独立子目录，避免多任务结果混画。
+
+已有完整 run 可从 `sample_gradient_metrics.json` 直接重算所有 summary 和图片，无需再次加载模型或运行 GPU 梯度计算：
+
+```bash
+python scripts/8_rebuild_tpt_gradient_alignment.py \
+  --run-dir 'runs/8_tpt_gradient_alignment/idea_magenet-a/run_20261119_154016_158809'
+```
+
+脚本更新每个 `task_result.json` 内的统计，并重写 seed 与 pooled 的 `results`、`gradient_summary`、`distribution_data.csv`、`summary.md` 和 `plots/`。每个 raw/update 图目录有一张九宫格图和三张横向三联图；默认同时导出 PNG/PDF。绘图颜色与布局由 `configs/visualization/8_tpt_gradient_alignment.yaml` 控制。此命令不会生成新的实验 run。
 
 `sample_gradient_metrics` 默认只保存每个样本的标量指标、初始正确性、任务元数据、selected view indices 和数值状态，不保存完整梯度向量。完整向量会使存储量约等于“样本数 × prompt 参数量 × 4 bytes × T/C × raw/update”，只有在需要事后检查某个样本或重新定义 alignment 时才通过 `save_vectors: true` 显式开启，并单独存储压缩文件。
 

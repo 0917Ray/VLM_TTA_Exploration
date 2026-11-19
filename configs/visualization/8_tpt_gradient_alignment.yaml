@@ -5,6 +5,7 @@ data:
 
 figure:
   figsize: [15.0, 10.0]
+  metric_figsize: [15.0, 4.2]
   dpi: 300
   transparent: false
 
@@ -19,8 +20,8 @@ histogram:
   x_quantile_limits: [0.005, 0.995]
 
 colors:
-  T: "#5B7CA7"
-  C: "#BA6580"
+  T: "#4F7C65"
+  C: "#A75B73"
 
 spines:
   linewidth: 2.0

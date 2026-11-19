@@ -169,7 +169,9 @@ python scripts/8_evaluate_tpt_gradient_alignment.py \
   --config configs/evaluation/8_tpt_gradient_alignment.yaml
 ```
 
-默认设置与状态转移统计一致，单任务运行 ImageNet-A、ViT-B/16、seed 123、LR 0.003；分别导出 raw/update norm、cosine、内积分布及按初始正确/错误分组的统计和图。实验定义、smoke test 与结果解释见 [TPT 梯度对齐](guide/8_tpt_gradient_alignment.md)。
+脚本内置默认值是 ImageNet-A、ViT-B/16、seed 123、LR 0.003。当前 `configs/evaluation/8_tpt_gradient_alignment.yaml` 将数据集扩展为 ImageNetV2、ImageNet-A、ImageNet-R 和 ImageNet-Sketch，共四个任务，分配至 `cuda:0` 至 `cuda:3`；分别导出 raw/update norm、cosine、内积分布及按初始正确/错误分组的统计和图。实验定义、smoke test 与结果解释见 [TPT 梯度对齐](guide/8_tpt_gradient_alignment.md)。
+
+若已有完整 run，只需重算统计和重画图，可运行 `python scripts/8_rebuild_tpt_gradient_alignment.py --run-dir 'runs/8_tpt_gradient_alignment/<idea>/<run_id>'`。它直接读取保存的逐样本指标，不执行模型推理或梯度计算。每种 raw/update 设定输出九宫格图，以及按 norm、cosine、dot 分开的三张横向三联图；cosine/dot 图在零线两侧标出正负占比，norm 图解释 T/C 颜色。统计表包含全部 8 个指标的正、负、精确零和 `|x| < 0.0001` 近零计数。
 
 低熵视图消融的结果位于：
 

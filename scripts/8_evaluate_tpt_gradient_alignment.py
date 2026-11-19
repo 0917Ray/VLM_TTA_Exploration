@@ -56,7 +56,7 @@ METRICS = (
     "raw_norm_T", "raw_norm_C", "raw_cosine", "raw_dot",
     "update_norm_T", "update_norm_C", "update_cosine", "update_dot",
 )
-ALIGNMENT_METRICS = {"raw_cosine", "raw_dot", "update_cosine", "update_dot"}
+NEAR_ZERO_THRESHOLD = 1e-4
 CONFIG_KEYS = {
     "data_root", "class_index", "class_names", "model_root", "output_root", "idea",
     "run_name", "datasets", "models", "devices", "seeds", "learning_rates",
@@ -282,7 +282,10 @@ def metric_stats(values: list[float], metric: str) -> dict[str, Any]:
     finite = [float(value) for value in values if math.isfinite(float(value))]
     result = {
         "mean": None, "median": None, "standard_deviation": None, "iqr": None,
-        "negative_count": None, "negative_ratio": None,
+        "positive_count": 0, "positive_ratio": None,
+        "negative_count": 0, "negative_ratio": None,
+        "exact_zero_count": 0, "exact_zero_ratio": None,
+        "near_zero_count": 0, "near_zero_ratio": None,
         "valid_count": len(finite), "nonfinite_count": len(values) - len(finite),
     }
     if not finite:
@@ -294,10 +297,15 @@ def metric_stats(values: list[float], metric: str) -> dict[str, Any]:
         "standard_deviation": sample_std(finite),
         "iqr": float(np.quantile(array, 0.75) - np.quantile(array, 0.25)),
     })
-    if metric in ALIGNMENT_METRICS:
-        negative_count = sum(value < 0 for value in finite)
-        result["negative_count"] = negative_count
-        result["negative_ratio"] = negative_count / len(finite)
+    for name, condition in (
+        ("positive", array > 0),
+        ("negative", array < 0),
+        ("exact_zero", array == 0),
+        ("near_zero", np.abs(array) < NEAR_ZERO_THRESHOLD),
+    ):
+        count = int(np.count_nonzero(condition))
+        result[f"{name}_count"] = count
+        result[f"{name}_ratio"] = count / len(finite)
     return result
 
 
@@ -537,6 +545,17 @@ def write_summary_files(root: Path, results: list[dict[str, Any]], records: list
             value = row[key]
             return "n/a" if value is None else f"{value:.8g}"
         lines.append(f"| {row['model']} | {row['dataset']} | {row['learning_rate']:g} | {row['group']} | {row['metric']} | {fmt('mean')} | {fmt('median')} | {fmt('standard_deviation')} | {fmt('iqr')} | {fmt('negative_ratio')} | {row['valid_count']} |")
+    lines.extend([
+        "", "## Sign and near-zero counts", "",
+        f"Counts use finite samples. Positive means x > 0; negative means x < 0; exact zero means x = 0; near zero means |x| < {NEAR_ZERO_THRESHOLD:g}. Near zero overlaps the sign counts. Percentages use the valid count for that row.",
+        "", "| Model | Dataset | LR | Group | Metric | Positive | Negative | Exact zero | Near zero | Valid |",
+        "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for row in summary_rows:
+        def count_percent(name: str) -> str:
+            ratio = row[f"{name}_ratio"]
+            return "n/a" if ratio is None else f"{row[f'{name}_count']} ({ratio:.2%})"
+        lines.append(f"| {row['model']} | {row['dataset']} | {row['learning_rate']:g} | {row['group']} | {row['metric']} | {count_percent('positive')} | {count_percent('negative')} | {count_percent('exact_zero')} | {count_percent('near_zero')} | {row['valid_count']} |")
     atomic_write_text(root / "summary.md", "\n".join(lines) + "\n")
 
 
