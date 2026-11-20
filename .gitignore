@@ -10,4 +10,5 @@ data/splits/*
 data/downloads/
 models/*
 runs/*
+smoke_test/outputs/
 conversation_w_GPT/

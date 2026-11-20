@@ -176,7 +176,7 @@ near_zero_count = count(abs(metric) < 0.0001)
 | weight decay | `0.01` |
 | prompt init | `a photo of a` |
 
-当前 `configs/evaluation/8_tpt_gradient_alignment.yaml` 覆盖了脚本默认数据集，指定 `imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch` 和 `idea: Four_Datasets`。使用该 YAML 的命令会展开四个完整任务，依次分配到 `cuda:0` 至 `cuda:3`。指定更多 LR 或 seed 后，任务继续按 devices 轮询分配。
+当前 `configs/evaluation/8_tpt_gradient_alignment.yaml` 覆盖了脚本默认数据集，指定 `imagenetv2`、`imagenet-a`、`imagenet-r`、`imagenet-sketch` 和 `idea: Four_Datasets`。使用该 YAML 的命令会展开四个完整任务，由四张配置的 GPU 并行领取。更多 model/dataset/LR 组合进入共享队列，空闲 GPU 自动领取下一组；同一组合的 seeds 按配置顺序在同一张 GPU 上执行。
 
 多任务定义为：
 
@@ -184,11 +184,13 @@ near_zero_count = count(abs(metric) < 0.0001)
 model × dataset × learning_rate × seed
 ```
 
-任务按 devices round-robin 分配，每张 GPU 同时最多运行一个任务。CLI 覆盖顺序为：脚本默认值 `<` YAML `<` CLI。由于 T/C 每个样本都各执行一次 FP32 backward 和一次 AdamW step，运行成本约为现有单分支 TPT 的两倍以上，正式运行前应先做小规模 smoke test。
+每个任务使用一个独立计算子进程，每张 GPU 同时最多运行一个任务。计算子进程保存数据后正常退出，释放 CUDA 上下文、张量和缓存；CPU 后处理读取保存数据，生成该任务的统计表和图片，无需等待其他任务。CPU 后处理同时最多执行一个任务，且启动时隐藏 GPU。空闲 GPU 可继续计算下一任务，不必等待画图结束。外部 `CUDA_VISIBLE_DEVICES` 限制会被保留，配置里的设备索引相对于父进程可见 GPU。CLI 覆盖顺序为：脚本默认值 `<` YAML `<` CLI。由于 T/C 每个样本都各执行一次 FP32 backward 和一次 AdamW step，运行成本约为现有单分支 TPT 的两倍以上，正式运行前应先做小规模 smoke test。
 
 ## 6. Smoke test 和正式运行边界
 
-在实现后，先使用与现有 transition workflow 相同的受限设置验证链路：
+先按 [准备工作](0_preparation.md) 创建并激活 `clip` Conda 环境，安装依赖、准备数据和权重。以下命令在项目根目录执行；新终端先执行 `conda activate clip`。GPU 实验需要已安装 CUDA 版 PyTorch 的 NVIDIA 服务器；本地无 CUDA 时可以运行下述调度单元测试与保存数据重绘。
+
+先使用与现有 transition workflow 相同的受限设置验证链路：
 
 ```text
 dataset: imagenet-a
@@ -213,7 +215,25 @@ Smoke test 至少应验证：
 
 Smoke test 的数值不用于正式结论。正式运行使用当前 YAML 中的 `limit: null`，并取消 smoke test 的单数据集、少视图等 CLI 覆盖。
 
-Smoke test 命令：
+先检查命令入口和不加载模型的调度测试：
+
+```bash
+python scripts/8_evaluate_tpt_gradient_alignment.py --help
+python scripts/8_rebuild_tpt_gradient_alignment.py --help
+python -m unittest discover -s tests -p 'test_8_tpt_gradient_alignment.py' -v
+```
+
+测试使用小型 CPU 子进程验证任务退出、GPU 槽位互斥、顺序 seed、快任务独立完成及失败保留；测试不验证真实 CUDA 显存。
+
+不依赖数据集和 CLIP 权重的图片输出检查：
+
+```bash
+python smoke_test/8_postprocess_smoke.py
+```
+
+该命令使用 12 条模拟记录调用真实 CPU 后处理子进程，检查 8 张 PNG、8 张 PDF 和完成标记，并从另一个工作目录独立重绘。输出保存在 `smoke_test/outputs/8_postprocess/<timestamp>/`；这些图仅用于验证流程，不是实验结果。
+
+有数据、权重和 CUDA 时，执行以下 smoke test：
 
 ```bash
 python scripts/8_evaluate_tpt_gradient_alignment.py \
@@ -222,7 +242,7 @@ python scripts/8_evaluate_tpt_gradient_alignment.py \
   --learning-rates 0.003 --seeds 123 --devices cuda:0 \
   --views 8 --selection-fraction 0.25 \
   --num-workers 0 --limit 8 \
-  --output-root /tmp/tpt_gradient_alignment_smoke
+  --output-root smoke_test/outputs/8_tpt_gradient_alignment
 ```
 
 当前 YAML 的全量命令：
@@ -236,11 +256,12 @@ CLI 覆盖 YAML，不会改写配置。视图选择和初始 canonical predictio
 
 ## 7. 输出契约
 
-建议输出结构如下：
+每个任务完成后独立生成输出；全部计算和后处理成功后，才生成最终汇总与 run 级 `COMPLETED.json`。输出结构如下：
 
 ```text
-runs/8_tpt_gradient_alignment/run_<id>/
+runs/8_tpt_gradient_alignment/idea_Four_Datasets/run_<id>/
 ├── resolved_config.yaml
+├── plot_config.yaml                   # 启动时保存的绘图配置（启用画图时）
 ├── run_<timestamp>.log
 ├── COMPLETED.json
 ├── seed_123/
@@ -251,9 +272,19 @@ runs/8_tpt_gradient_alignment/run_<id>/
 │   │   ├── summary.md
 │   │   └── plots/
 │   ├── vit-b-16__imagenet-a__lr_0p003/
-│   │   ├── sample_gradient_metrics.{csv,jsonl}
+│   │   ├── sample_gradient_metrics.{json,csv,jsonl}
+│   │   ├── task_config.json
 │   │   ├── task_result.json
-│   │   └── task.log
+│   │   ├── COMPUTE_COMPLETED.json
+│   │   ├── COMPLETED.json
+│   │   ├── results.{json,csv}
+│   │   ├── gradient_summary.{json,csv}
+│   │   ├── distribution_data.csv
+│   │   ├── summary.md
+│   │   ├── plots/                      # 包含任务子目录中的 PNG/PDF
+│   │   ├── worker.log                  # 计算进程 stdout/stderr
+│   │   ├── postprocess.log             # CPU 后处理 stdout/stderr
+│   │   └── task.log                    # 样本进度与计算耗时
 └── summary/
     ├── results.{json,csv}
     ├── gradient_summary.{json,csv}
@@ -264,14 +295,41 @@ runs/8_tpt_gradient_alignment/run_<id>/
 
 每个 summary 中的 `gradient_summary` 按 model、dataset、learning rate 和 `all`/正确性分组列出统计；`distribution_data.csv` 保存图表使用的逐样本长表。图表再按 model/dataset/LR 写入独立子目录，避免多任务结果混画。
 
-已有完整 run 可从 `sample_gradient_metrics.json` 直接重算所有 summary 和图片，无需再次加载模型或运行 GPU 梯度计算：
+`COMPUTE_COMPLETED.json` 表示样本数据已完整保存；调度器还会等待计算子进程正常退出，再启动该任务的后处理。任务目录的 `COMPLETED.json` 表示统计和请求的图片均已完成；`--no-plot` 时仍生成统计表，并记录 `plot_status: disabled`。最终 run 级完成标记只有全部任务与汇总成功时才写入。某个任务失败后，其他独立任务继续执行；失败阶段写入 `COMPUTE_FAILED.json` 或 `POSTPROCESS_FAILED.json`，整批运行以非零状态结束并保留 `FAILED.json`，不会生成假成功标记。
+
+计算进程的样本进度写入 `task.log`，终端显示任务开始、计算进程退出、输出完成等里程碑。若想观察单任务进度，可对实际任务目录里的 `task.log` 使用 `tail -f`。这是新启动进程的行为，修改代码不会升级已经在运行的旧进程。
+
+### 7.1 为已完成的单个任务补图
+
+无需等待整个 run 完成。下面以已有运行的相对路径为例；先确认该任务的 `task_result.json` 和 `sample_gradient_metrics.json` 都已存在且完整。此命令支持没有完成标记的旧版任务，并检查样本数、任务身份及重复样本：
 
 ```bash
 python scripts/8_rebuild_tpt_gradient_alignment.py \
-  --run-dir 'runs/8_tpt_gradient_alignment/idea_magenet-a/run_20261119_154016_158809'
+  --task-dir 'runs/8_tpt_gradient_alignment/idea_Four_Datasets/run_20261119_172401_015321/seed_123/vit-b-16__imagenet-a__lr_0p003' \
+  --output-dir 'runs/8_tpt_gradient_alignment/idea_Four_Datasets/run_20261119_172401_015321/task_previews/vit-b-16__imagenet-a__lr_0p003'
 ```
 
-脚本更新每个 `task_result.json` 内的统计，并重写 seed 与 pooled 的 `results`、`gradient_summary`、`distribution_data.csv`、`summary.md` 和 `plots/`。每个 raw/update 图目录有一张九宫格图和三张横向三联图；默认同时导出 PNG/PDF。绘图颜色与布局由 `configs/visualization/8_tpt_gradient_alignment.yaml` 控制。此命令不会生成新的实验 run。
+该命令只读取源任务，在独立目录生成统计表、重绘数据、PNG/PDF 和完成标记，不会读取模型或重新计算梯度。省略 `--output-dir` 则写入任务目录，适用于自动后处理失败后的重试。不要同时对同一输出目录运行多个后处理程序。
+
+### 7.2 重建整个 run
+
+所有预期任务都已计算完成时，可重算任务、seed 和 pooled 汇总及图片；适用于完整 run，也适用于计算完成但自动画图失败的 run：
+
+```bash
+python scripts/8_rebuild_tpt_gradient_alignment.py \
+  --run-dir 'runs/8_tpt_gradient_alignment/idea_Four_Datasets/run_20261119_172401_015321'
+```
+
+脚本根据 `resolved_config.yaml` 检查预期任务集合。缺任务时拒绝生成完整汇总，此时请使用 `--task-dir`。重建成功后更新完成标记；这不会重新执行 GPU 计算。若原运行的调度器仍在工作，使用上面的单任务独立输出方式，等原运行结束后再重建整个 run，避免两个程序写入同一份汇总。
+
+每种 raw/update 设定输出一张九宫格图和三张横向三联图，默认各有 PNG/PDF。图旁保存绘图数据、配置与独立脚本。修改图旁 `plot_config.yaml` 后，可在该图包目录执行：
+
+```bash
+python 8_plot_tpt_gradient_alignment.py \
+  --config plot_config.yaml --distribution distribution_data.csv --output-dir .
+```
+
+此命令只重绘。更换汇总/重建的样式则通过 `--plot-config configs/visualization/8_tpt_gradient_alignment.yaml` 指定。统计仍按同一 model/dataset/LR 分组，pooled 统计从样本记录重算，不平均各任务的中位数或分位数。
 
 `sample_gradient_metrics` 默认只保存每个样本的标量指标、初始正确性、任务元数据、selected view indices 和数值状态，不保存完整梯度向量。完整向量会使存储量约等于“样本数 × prompt 参数量 × 4 bytes × T/C × raw/update”，只有在需要事后检查某个样本或重新定义 alignment 时才通过 `save_vectors: true` 显式开启，并单独存储压缩文件。
 

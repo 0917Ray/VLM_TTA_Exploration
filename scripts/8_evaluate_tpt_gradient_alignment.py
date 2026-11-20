@@ -9,15 +9,16 @@ import json
 import importlib
 import logging
 import math
-import multiprocessing
 import os
 import statistics
+import subprocess
+import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from itertools import product
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any
 
 import numpy as np
@@ -41,7 +42,6 @@ from evaluate_tpt import (
     TPTTransform,
     average_entropy,
     candidate_class_indices,
-    initialize_progress_lock,
     load_class_index,
     load_class_names,
     set_seed,
@@ -198,6 +198,9 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Path]
         raise SystemExit("devices must be a non-empty list without duplicates")
     for name in values["devices"]:
         validate_device(name)
+    canonical_devices = [str(torch.device("cuda:0" if name == "cuda" else name)) for name in values["devices"]]
+    if len(set(canonical_devices)) != len(canonical_devices):
+        raise SystemExit("devices must not refer to the same device through different aliases")
     if not isinstance(values["seeds"], list) or not values["seeds"] or len(set(values["seeds"])) != len(values["seeds"]):
         raise SystemExit("seeds must be a non-empty list without duplicates")
     if any(not isinstance(seed, int) or isinstance(seed, bool) for seed in values["seeds"]):
@@ -411,9 +414,9 @@ def branch_gradient_update(
     return gradient, update, float(loss.detach().float().item())
 
 
-def evaluate_task(serialized_args: dict[str, Any], model_name: str, dataset_name: str, learning_rate: float, seed: int, device_name: str, position: int, seed_root: str) -> dict[str, Any]:
+def evaluate_task(serialized_args: dict[str, Any], model_name: str, dataset_name: str, learning_rate: float, seed: int, device_name: str, position: int, seed_root: str, runtime_device_name: str | None = None) -> dict[str, Any]:
     args = argparse.Namespace(**serialized_args)
-    device = torch.device(device_name)
+    device = torch.device(runtime_device_name or device_name)
     if device.type == "cuda":
         torch.cuda.set_device(device)
     set_seed(seed)
@@ -500,16 +503,18 @@ def evaluate_task(serialized_args: dict[str, Any], model_name: str, dataset_name
         "candidate_classes": len(candidate_indices), "views": args.views,
         "selection_fraction": args.selection_fraction, "selection_count": args.selection_count,
         "weight_decay": args.weight_decay, "prompt_init": args.prompt_init,
-        "device": str(device), "elapsed_minutes": elapsed,
+        "device": device_name, "elapsed_minutes": elapsed,
         "sample_results": str(task_root / "sample_gradient_metrics.json"),
         "summary_rows": summaries,
     }
     atomic_write_json(task_root / "task_result.json", result)
+    atomic_write_json(task_root / "COMPUTE_COMPLETED.json", {
+        "status": "computed", "samples": len(records),
+        "completed_at": datetime.now().astimezone().isoformat(),
+    })
     logger.info("completed samples=%d in %.2f min", len(records), elapsed)
-    if device.type == "cuda":
-        del model
-        with torch.cuda.device(device):
-            torch.cuda.empty_cache()
+    # The dedicated child exits immediately after returning. This releases its
+    # CUDA context as well as tensors/caches, before CPU post-processing starts.
     return result
 
 
@@ -517,21 +522,14 @@ def build_jobs(args: argparse.Namespace) -> list[tuple[str, str, float, int]]:
     return list(product(args.models, args.datasets, args.learning_rates, args.seeds))
 
 
-def assign_jobs(jobs: list[tuple[str, str, float, int]], devices: list[str]) -> list[list[tuple[str, str, float, int]]]:
-    assignments = [[] for _ in devices]
-    for index, job in enumerate(jobs):
-        assignments[index % len(devices)].append(job)
-    return assignments
-
-
 def load_records(result: dict[str, Any]) -> list[dict[str, Any]]:
     with Path(result["sample_results"]).open(encoding="utf-8") as stream:
         return json.load(stream)
 
 
-def write_summary_files(root: Path, results: list[dict[str, Any]], records: list[dict[str, Any]], title: str) -> None:
+def write_summary_files(root: Path, results: list[dict[str, Any]], records: list[dict[str, Any]], title: str, scope: str | None = None) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    scope = "pooled" if title == "All tasks" else "per_seed"
+    scope = scope or ("pooled" if title == "All tasks" else "per_seed")
     summary_rows = summarize_records(records, scope)
     distribution = distribution_rows(records, scope)
     atomic_write_json(root / "results.json", results)
@@ -559,58 +557,212 @@ def write_summary_files(root: Path, results: list[dict[str, Any]], records: list
     atomic_write_text(root / "summary.md", "\n".join(lines) + "\n")
 
 
+def load_task_data(task_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read a complete task, including legacy runs without a completion marker."""
+    result = json.loads((task_root / "task_result.json").read_text(encoding="utf-8"))
+    sample_path = task_root / "sample_gradient_metrics.json"
+    records = json.loads(sample_path.read_text(encoding="utf-8"))
+    if not records or len(records) != int(result["samples"]):
+        raise ValueError(f"Sample count mismatch in {task_root}")
+    keys = ("model", "dataset", "learning_rate", "seed")
+    if any(any(row[key] != result[key] for key in keys) for row in records):
+        raise ValueError(f"Task identity mismatch in {sample_path}")
+    if len({row["sample_id"] for row in records}) != len(records):
+        raise ValueError(f"Duplicate samples in {sample_path}")
+    # Resolve relative to the task, so downloaded runs remain reusable.
+    result["sample_results"] = str(sample_path.resolve())
+    result["summary_rows"] = summarize_records(records, "per_task")
+    return result, records
+
+
+def finalize_task(task_root: Path, plot_config: Path | None, output_root: Path | None = None) -> dict[str, Any]:
+    destination = output_root or task_root
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "COMPLETED.json").unlink(missing_ok=True)
+    try:
+        result, records = load_task_data(task_root)
+        write_summary_files(destination, [result], records, "Task summary", scope="per_task")
+        paths = []
+        plot_enabled = plot_config is not None and load_yaml(plot_config).get("enabled", True)
+        if plot_enabled:
+            generate_plots = importlib.import_module("8_plot_tpt_gradient_alignment").generate_plots
+            paths = generate_plots(plot_config, destination / "distribution_data.csv", destination / "plots")
+            if not paths:
+                raise RuntimeError("Plotting returned no figures")
+        atomic_write_json(destination / "COMPLETED.json", {
+            "status": "complete", "completed_at": datetime.now().astimezone().isoformat(),
+            "source_task": str(task_root.resolve()), "samples": len(records),
+            "plot_status": "complete" if plot_enabled else "disabled", "figure_files": len(paths),
+        })
+        (destination / "POSTPROCESS_FAILED.json").unlink(missing_ok=True)
+        return result
+    except Exception as error:
+        atomic_write_json(destination / "POSTPROCESS_FAILED.json", {"status": "failed", "stage": "postprocess", "error": str(error)})
+        raise
+
+
+def task_environment(device_name: str | None) -> dict[str, str]:
+    env = os.environ.copy()
+    if device_name is None or torch.device(device_name).type != "cuda":
+        env["CUDA_VISIBLE_DEVICES"] = ""
+        for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+            env[name] = "1"
+    else:
+        index = torch.device(device_name).index or 0
+        visible = env.get("CUDA_VISIBLE_DEVICES")
+        # Config indices are relative to the parent's visible devices. Preserve
+        # external allocations, including GPU UUIDs, instead of using host IDs.
+        env["CUDA_VISIBLE_DEVICES"] = visible.split(",")[index].strip() if visible is not None else str(index)
+    return env
+
+
+def run_task_process(config_path: Path, device_name: str | None, postprocess: bool = False) -> None:
+    command = [sys.executable, str(Path(__file__).resolve()), "--task-config", str(config_path)]
+    if postprocess:
+        command.append("--postprocess")
+    log_path = config_path.parent / ("postprocess.log" if postprocess else "worker.log")
+    with log_path.open("w", encoding="utf-8") as stream:
+        subprocess.run(command, env=task_environment(device_name), stdout=stream, stderr=subprocess.STDOUT, check=True)
+
+
 def run_jobs(args: argparse.Namespace, devices: list[str]) -> list[dict[str, Any]]:
-    jobs = build_jobs(args)
-    assignments = assign_jobs(jobs, devices)
-    for seed in args.seeds:
-        (args.output_root / f"seed_{seed}").mkdir(parents=True, exist_ok=True)
-    spawn = multiprocessing.get_context("spawn")
-    lock = spawn.RLock()
-    results: list[dict[str, Any]] = []
-    with ExitStack() as stack:
-        executors = [stack.enter_context(ProcessPoolExecutor(max_workers=1, mp_context=spawn, initializer=initialize_progress_lock, initargs=(lock,))) for _ in devices]
-        futures = {}
-        serialized = json_ready(vars(args))
-        for position, (executor, device, device_jobs) in enumerate(zip(executors, devices, assignments)):
-            for model_name, dataset_name, rate, seed in device_jobs:
-                future = executor.submit(evaluate_task, serialized, model_name, dataset_name, rate, seed, device, position, str(args.output_root / f"seed_{seed}"))
-                futures[future] = (model_name, dataset_name, rate, seed)
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            print(f"[SUCCESS] seed={result['seed']} {result['model']} {result['dataset']} lr={result['learning_rate']:g} samples={result['samples']}", flush=True)
+    """Threads coordinate short-lived children; threads never evaluate on CUDA."""
+    combinations: Queue = Queue()
+    for combination in product(args.models, args.datasets, args.learning_rates):
+        combinations.put(combination)
+    postprocessing: Queue = Queue()
+    serialized = json_ready(vars(args))
+
+    def report_failure(task_root: Path, stage: str, error: Exception) -> str:
+        message = f"{task_root.name}: {stage}: {error}"
+        marker = "COMPUTE_FAILED.json" if stage == "compute" else "POSTPROCESS_FAILED.json"
+        atomic_write_json(task_root / marker, {"status": "failed", "stage": stage, "error": str(error)})
+        print(f"[FAIL] {message}; logs={task_root}", flush=True)
+        return message
+
+    def postprocess(config_path: Path) -> str | None:
+        try:
+            run_task_process(config_path, None, postprocess=True)
+            print(f"[SUCCESS] task outputs ready: {config_path.parent}", flush=True)
+            return None
+        except Exception as error:
+            return report_failure(config_path.parent, "postprocess", error)
+
+    def run_device(position: int, device: str, cpu_pool: ThreadPoolExecutor) -> tuple[list[dict[str, Any]], list[str]]:
+        results, failures = [], []
+        while True:
+            try:
+                model_name, dataset_name, rate = combinations.get_nowait()
+            except Empty:
+                break
+            # All seeds of a combination stay sequential on the same device.
+            for seed in args.seeds:
+                seed_root = args.output_root / f"seed_{seed}"
+                task_root = seed_root / task_slug(model_name, dataset_name, rate)
+                task_root.mkdir(parents=True, exist_ok=True)
+                config_path = task_root / "task_config.json"
+                atomic_write_json(config_path, {
+                    "args": serialized, "model_name": model_name, "dataset_name": dataset_name,
+                    "learning_rate": rate, "seed": seed, "device_name": device,
+                    "runtime_device_name": "cuda:0" if torch.device(device).type == "cuda" else device,
+                    "position": position, "seed_root": str(seed_root),
+                })
+                print(f"[INFO] start {device}: seed={seed} {model_name} {dataset_name} lr={rate:g}", flush=True)
+                try:
+                    run_task_process(config_path, device)
+                    # Keep sample loading/validation in the CPU stage so the
+                    # device slot can immediately launch its next computation.
+                    result = json.loads((task_root / "task_result.json").read_text(encoding="utf-8"))
+                    result["sample_results"] = str(task_root / "sample_gradient_metrics.json")
+                    results.append(result)
+                    print(f"[SUCCESS] compute exited; released {device}: seed={seed} {task_root.name}", flush=True)
+                    postprocessing.put(cpu_pool.submit(postprocess, config_path))
+                except Exception as error:
+                    failures.append(report_failure(task_root, "compute", error))
+        return results, failures
+
+    results, failures = [], []
+    # One CPU child at a time avoids plotting bursts competing with data loaders.
+    with ThreadPoolExecutor(max_workers=1) as cpu_pool:
+        with ThreadPoolExecutor(max_workers=len(devices)) as device_pool:
+            futures = [device_pool.submit(run_device, position, device, cpu_pool) for position, device in enumerate(devices)]
+            for future in as_completed(futures):
+                device_results, device_failures = future.result()
+                results.extend(device_results)
+                failures.extend(device_failures)
+        while not postprocessing.empty():
+            error = postprocessing.get_nowait().result()
+            if error:
+                failures.append(error)
+    if failures:
+        atomic_write_json(args.output_root / "FAILED.json", {"status": "failed", "failures": failures, "computed_tasks": len(results), "expected_tasks": len(build_jobs(args))})
+        raise RuntimeError(f"{len(failures)} task stage(s) failed; saved results retained. See {args.output_root / 'FAILED.json'}")
     return results
 
 
+def run_worker(argv: list[str]) -> bool:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--task-config", type=Path)
+    parser.add_argument("--postprocess", action="store_true")
+    worker, remaining = parser.parse_known_args(argv)
+    if worker.task_config is None:
+        return False
+    if remaining:
+        parser.error(f"Unexpected worker arguments: {remaining}")
+    spec = json.loads(worker.task_config.read_text(encoding="utf-8"))
+    args = spec.pop("args")
+    if worker.postprocess:
+        plot = args["plot"]
+        finalize_task(worker.task_config.parent, Path(plot["config"]) if plot["enabled"] else None)
+    else:
+        evaluate_task(args, **spec)
+    return True
+
+
 def main(argv: list[str] | None = None) -> None:
+    if run_worker(sys.argv[1:] if argv is None else argv):
+        return
     args, config_path = parse_args(argv)
     logger = setup_logging(args.output_root, args.log_file)
+    if args.plot["enabled"]:
+        source_plot_config = args.plot["config"]
+        args.plot["config"] = args.output_root / "plot_config.yaml"
+        atomic_write_text(args.plot["config"], source_plot_config.read_text(encoding="utf-8"))
     payload = json_ready(vars(args)); payload["source_config"] = str(config_path); payload["generated_at"] = datetime.now().astimezone().isoformat()
     atomic_write_text(args.output_root / "resolved_config.yaml", yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
     jobs = build_jobs(args)
-    devices = args.devices[:min(len(args.devices), len(jobs))]
+    combination_count = len(args.models) * len(args.datasets) * len(args.learning_rates)
+    devices = args.devices[:min(len(args.devices), combination_count)]
     logger.info("resolved args=%s", payload)
     print(f"[INFO] TPT gradient alignment: {len(jobs)} tasks, devices={', '.join(devices)}", flush=True)
-    results = run_jobs(args, devices)
-    results.sort(key=lambda row: (args.models.index(row["model"]), args.datasets.index(row["dataset"]), args.learning_rates.index(float(row["learning_rate"])), args.seeds.index(int(row["seed"]))))
-    all_records: list[dict[str, Any]] = []
-    for seed in args.seeds:
-        seed_results = [row for row in results if int(row["seed"]) == seed]
-        seed_records: list[dict[str, Any]] = []
-        for result in seed_results:
-            seed_records.extend(load_records(result))
-        write_summary_files(args.output_root / f"seed_{seed}" / "summary", seed_results, seed_records, f"Seed {seed}")
-        all_records.extend(seed_records)
-    summary_root = args.output_root / "summary"
-    write_summary_files(summary_root, results, all_records, "All tasks")
-    if args.plot["enabled"]:
-        generate_plots = importlib.import_module("8_plot_tpt_gradient_alignment").generate_plots
-        for root in [args.output_root / f"seed_{seed}" / "summary" for seed in args.seeds] + [summary_root]:
-            generate_plots(Path(args.plot["config"]), root / "distribution_data.csv", root / "plots")
-        print("[SUCCESS] generated gradient alignment plots", flush=True)
-    atomic_write_json(args.output_root / "COMPLETED.json", {"status": "complete", "completed_at": datetime.now().astimezone().isoformat(), "total_tasks": len(jobs), "expected_seeds": args.seeds, "completed_seeds": args.seeds, "summary": str(summary_root)})
-    logger.info("completed workflow; summary=%s", summary_root)
-    print(f"[SUCCESS] results written to {args.output_root}", flush=True)
+    try:
+        results = run_jobs(args, devices)
+        results.sort(key=lambda row: (args.models.index(row["model"]), args.datasets.index(row["dataset"]), args.learning_rates.index(float(row["learning_rate"])), args.seeds.index(int(row["seed"]))))
+        all_records: list[dict[str, Any]] = []
+        for seed in args.seeds:
+            seed_results = [row for row in results if int(row["seed"]) == seed]
+            seed_records: list[dict[str, Any]] = []
+            for result in seed_results:
+                seed_records.extend(load_records(result))
+            write_summary_files(args.output_root / f"seed_{seed}" / "summary", seed_results, seed_records, f"Seed {seed}")
+            all_records.extend(seed_records)
+        summary_root = args.output_root / "summary"
+        write_summary_files(summary_root, results, all_records, "All tasks")
+        if args.plot["enabled"]:
+            generate_plots = importlib.import_module("8_plot_tpt_gradient_alignment").generate_plots
+            for root in [args.output_root / f"seed_{seed}" / "summary" for seed in args.seeds] + [summary_root]:
+                generate_plots(Path(args.plot["config"]), root / "distribution_data.csv", root / "plots")
+            print("[SUCCESS] generated gradient alignment plots", flush=True)
+        atomic_write_json(args.output_root / "COMPLETED.json", {"status": "complete", "completed_at": datetime.now().astimezone().isoformat(), "total_tasks": len(jobs), "expected_seeds": args.seeds, "completed_seeds": args.seeds, "summary": str(summary_root)})
+        logger.info("completed workflow; summary=%s", summary_root)
+        print(f"[SUCCESS] results written to {args.output_root}", flush=True)
+    except Exception as error:
+        logger.exception("workflow failed; completed task outputs are retained")
+        if not (args.output_root / "FAILED.json").exists():
+            atomic_write_json(args.output_root / "FAILED.json", {
+                "status": "failed", "stage": "workflow", "error": str(error),
+            })
+        raise
 
 
 if __name__ == "__main__":

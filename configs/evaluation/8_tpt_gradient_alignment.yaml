@@ -13,6 +13,7 @@ datasets:
   - imagenet-sketch
 models:
   - ViT-B/16
+# Each device runs one fresh task process; seeds stay sequential per combination.
 devices:
   - cuda:0
   - cuda:1
@@ -35,6 +36,7 @@ gradient_epsilon: 1.0e-12
 save_vectors: false
 log_file: run.log
 
+# CPU post-processing runs after each task exits, then again for final summaries.
 plot:
   enabled: true
   config: configs/visualization/8_tpt_gradient_alignment.yaml
